@@ -1,6 +1,7 @@
 import random
 import time
 import math
+import re
 import numpy as np
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
@@ -318,15 +319,24 @@ class HumanSimulator:
 
         def click_suggestion_box():
             try:
-                suggestions = self.driver.find_elements(By.XPATH,'//ul[@role="listbox"]/li//div[@role="presentation"]/span[not(@class)]')
-                logger.info(f"{"-"*10} Suggestion Box {"-"*10}")
-                suggestion_len = len(suggestions)
-                random_input = random.randint(0,suggestion_len - 1)
-                sugg_used = suggestions[random_input].text
+                time.sleep(self._gauss(1.0, 0.2, 0.6, 1.5))
+                suggestions = self.driver.find_elements(
+                    By.CSS_SELECTOR, 'ul[role="listbox"] li'
+                )
+                suggestions = [
+                    suggestion for suggestion in suggestions
+                    if suggestion.is_displayed() and suggestion.text.strip()
+                ]
+                logger.info(f"{'-' * 10} Suggestion Box {'-' * 10}")
+                if not suggestions:
+                    return ""
+
+                suggestion = random.choice(suggestions)
+                sugg_used = suggestion.text.strip()
                 logger.info(f"Suggestion using for this search {sugg_used}")
-                # suggestions[random_input].click()
-                self.mouse_click(suggestions[random_input])
-                logger.info(f"{"-"*10} Clicked {"-"*10}")
+                self.mouse_hover(suggestion)
+                self.mouse_click_after_hover(suggestion)
+                logger.info(f"{'-' * 10} Clicked {'-' * 10}")
                 return sugg_used
             
             except Exception as e:
@@ -340,18 +350,44 @@ class HumanSimulator:
         input_query = query
         logger.info(f"Query Used {input_query}")
 
-        for char in input_query:
-            search_box.send_keys(char)
-            delay = char_delay if char_delay is not None else self._dynamic_typing_delay(char)
+        typo_positions = set()
+        words = list(re.finditer(r"[A-Za-z]+", input_query))
+        # Pick either one random word or None, so sometimes the full query is correct.
+        selected_word = random.choice(words + [None]) if words else None
+        if selected_word is not None:
+            typo_positions.add(
+                random.randrange(selected_word.start(), selected_word.end())
+            )
+        alphabet = "abcdefghijklmnopqrstuvwxyz"
+        logger.info(f"Typing with {len(typo_positions)} spelling mistakes")
+
+        for index, char in enumerate(input_query):
+            if index in typo_positions:
+                wrong_char = random.choice(
+                    [letter for letter in alphabet if letter != char.lower()]
+                )
+                search_box.send_keys(wrong_char.upper() if char.isupper() else wrong_char)
+            else:
+                search_box.send_keys(char)
+            delay = char_delay if char_delay is not None else self._gauss(
+                0.24 if char not in (" ", ",", ".", "!", "?") else 0.38,
+                0.07,
+                0.12,
+                0.5,
+            )
             time.sleep(delay)
             if random.random() < 0.03:
                 pause = think_pause if think_pause is not None else self._dynamic_think_pause()
                 time.sleep(pause)
-        # query_used = click_suggestion_box() if is_query_selection else ""
         final_pause = pre_submit_pause if pre_submit_pause is not None else self._gauss(0.6, 0.2, 0.2, 1.5)
         time.sleep(final_pause)
+        query_used = click_suggestion_box()
+        if query_used:
+            return query_used
+
         self.mouse_click(search_box)
         search_box.submit()
+        return input_query
 
     def mouse_click(self, element, click_delay=None):
         self.move_to_element_like_human(element)
@@ -401,6 +437,92 @@ class HumanSimulator:
             scrolled += step
             delay = step_delay if step_delay is not None else self._dynamic_scroll_step_delay()
             time.sleep(delay)
+
+    # ---------- Page exploration helpers ----------
+
+    def bring_element_into_view_with_wheel(self, element):
+        """Bring a requested element into view using the simulator's scrolling."""
+        self._scroll_element_into_view(element)
+
+    def mouse_click_after_hover(self, element):
+        """Click an element that has already been reached and hovered."""
+        time.sleep(self._gauss(0.4, 0.12, 0.2, 0.7))
+        ActionChains(self.driver).click(element).perform()
+
+    def move_mouse_around(self, moves=3):
+        """Move the pointer through a few safe viewport positions."""
+        width, height = self.driver.execute_script(
+            "return [window.innerWidth, window.innerHeight];"
+        )
+        for _ in range(moves):
+            x = random.randint(round(width * 0.25), round(width * 0.75))
+            y = random.randint(round(height * 0.25), round(height * 0.75))
+            ActionChains(self.driver).move_by_offset(
+                x - self.current_x, y - self.current_y
+            ).pause(self._gauss(0.3, 0.08, 0.15, 0.5)).perform()
+            self.current_x, self.current_y = x, y
+            self._idle_pause()
+
+    def _visible_reading_elements(self):
+        elements = self.driver.find_elements(By.CSS_SELECTOR, "main p, main h2, main h3")
+        return self.driver.execute_script(
+            "return arguments[0].filter(e => { const r=e.getBoundingClientRect(); "
+            "return r.width>0 && r.height>0 && r.top>=100 && r.bottom<innerHeight-30; });",
+            elements,
+        ) or []
+
+    def select_random_words(self, count, already_selected=None):
+        """Select distinct visible words with mouse double-clicks."""
+        selected = []
+        seen = {word.lower() for word in (already_selected or [])}
+        for _ in range(count * 12):
+            if len(selected) == count:
+                return selected
+            elements = [e for e in self._visible_reading_elements() if len(e.text) > 20]
+            if not elements:
+                break
+            element = random.choice(elements)
+            self.mouse_hover(element)
+            ActionChains(self.driver).double_click(element).perform()
+            value = self.driver.execute_script("return getSelection().toString();") or ""
+            words = re.findall(r"[A-Za-z]+", value)
+            if len(words) == 1 and words[0].lower() not in seen:
+                selected.append(words[0])
+                seen.add(words[0].lower())
+            time.sleep(self._gauss(2.0, 0.5, 1.0, 3.2))
+        if len(selected) != count:
+            raise RuntimeError(f"Selected {len(selected)} of {count} requested words")
+        return selected
+
+    def browse_g2_page(self, min_seconds=75, max_seconds=150):
+        """Read, hover, and occasionally inspect one image without continuous scrolling."""
+        duration = random.uniform(min_seconds, max_seconds)
+        deadline = time.monotonic() + duration
+        actions = []
+        image_clicked = False
+        while time.monotonic() < deadline:
+            readable = self._visible_reading_elements()
+            images = [
+                image for image in self.driver.find_elements(By.CSS_SELECTOR, "main img")
+                if image.is_displayed() and image.size["width"] >= 80
+                and image.size["height"] >= 60
+            ]
+            if images and not image_clicked and random.random() < 0.25:
+                image = random.choice(images)
+                self.mouse_hover(image)
+                self.mouse_click_after_hover(image)
+                time.sleep(self._gauss(5, 1, 3, 8))
+                image_clicked = True
+                actions.append("image")
+            elif readable:
+                element = random.choice(readable)
+                self.mouse_hover(element)
+                time.sleep(self._gauss(4, 1, 2, 7))
+                actions.append("read")
+            else:
+                self.move_mouse_around(1)
+                actions.append("wander")
+        return {"seconds": round(duration), "actions": actions, "picture_clicked": image_clicked}
 
     # ---------- Internal helpers ----------
 
