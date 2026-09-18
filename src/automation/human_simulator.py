@@ -313,7 +313,7 @@ class HumanSimulator:
             action = random.choice([self.scroll_page, self._idle_pause, self._random_drift])
             action()
 
-    def input_search_query(self, query, char_delay=None, think_pause=None, pre_submit_pause=None):
+    def input_search_query(self, query, char_delay=None, think_pause=None, pre_submit_pause=None,suggestion=True):
 
         def click_suggestion_box():
             try:
@@ -370,7 +370,7 @@ class HumanSimulator:
             except Exception as e:
                 logger.info(f"Default Search Input Useing due to {e}")
                 return ""
-            
+        
         search_box = self.driver.find_element(By.NAME, "q")
         self.mouse_click(search_box)
         search_box.clear()
@@ -382,10 +382,12 @@ class HumanSimulator:
         words = list(re.finditer(r"[A-Za-z]+", input_query))
         # Pick either one random word or None, so sometimes the full query is correct.
         selected_word = random.choice(words + [None]) if words else None
+        
         if selected_word is not None:
             typo_positions.add(
                 random.randrange(selected_word.start(), selected_word.end())
             )
+
         alphabet = "abcdefghijklmnopqrstuvwxyz"
         logger.info(f"Typing with {len(typo_positions)} spelling mistakes")
 
@@ -407,9 +409,11 @@ class HumanSimulator:
             if random.random() < 0.03:
                 pause = think_pause if think_pause is not None else self._dynamic_think_pause()
                 time.sleep(pause)
-        query_used = click_suggestion_box()
-        if query_used:
-            return query_used
+        if suggestion:
+            query_used = click_suggestion_box()
+
+            if query_used:
+                return query_used
 
         # No relevant suggestion appeared. Replace any typo and submit the
         # intended query so later polling waits for the correct result page.
@@ -438,11 +442,56 @@ class HumanSimulator:
         duration = hover_time if hover_time is not None else self._dynamic_hover_time(element)
         time.sleep(duration)
 
+    # def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
+    #     total_scroll = total_scroll if total_scroll is not None else int(self._gauss(700, 200, 200, 1400))
+
+    #     current_direction = direction or random.choice(["down", "down", "up"])
+    #     scrolled = 0
+
+    #     while scrolled < total_scroll:
+    #         can_down = self._can_scroll_down()
+    #         can_up = self._can_scroll_up()
+
+    #         if not can_down and not can_up:
+    #             break
+
+    #         if current_direction == "down" and not can_down:
+    #             current_direction = "up"
+    #         elif current_direction == "up" and not can_up:
+    #             current_direction = "down"
+    #         elif random.random() < 0.08:
+    #             flip_to = "up" if current_direction == "down" else "down"
+    #             if (flip_to == "up" and can_up) or (flip_to == "down" and can_down):
+    #                 current_direction = flip_to
+
+    #         step = self._dynamic_scroll_amount(total_scroll - scrolled)
+    #         signed_step = step if current_direction == "down" else -step
+
+    #         if self.use_native_cursor:
+    #             self.pyautogui.scroll(-signed_step if current_direction == "down" else abs(signed_step))
+    #         else:
+    #             self.driver.execute_script(f"window.scrollBy(0, {signed_step});")
+                
+
+    #         scrolled += step
+    #         delay = step_delay if step_delay is not None else self._dynamic_scroll_step_delay()
+    #         time.sleep(delay)
+
     def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
-        total_scroll = total_scroll if total_scroll is not None else int(self._gauss(700, 200, 200, 1400))
+        total_scroll = (
+            total_scroll
+            if total_scroll is not None
+            else int(self._gauss(700, 200, 200, 1400))
+        )
 
         current_direction = direction or random.choice(["down", "down", "up"])
         scrolled = 0
+
+        # Cache the viewport center once — used only in the native-cursor branch.
+        if self.use_native_cursor:
+            win = self.driver.get_window_rect()
+            cx = win["x"] + win["width"] // 2
+            cy = win["y"] + win["height"] // 2
 
         while scrolled < total_scroll:
             can_down = self._can_scroll_down()
@@ -451,6 +500,7 @@ class HumanSimulator:
             if not can_down and not can_up:
                 break
 
+            # Direction arbitration -------------------------------------------------
             if current_direction == "down" and not can_down:
                 current_direction = "up"
             elif current_direction == "up" and not can_up:
@@ -463,13 +513,29 @@ class HumanSimulator:
             step = self._dynamic_scroll_amount(total_scroll - scrolled)
             signed_step = step if current_direction == "down" else -step
 
+            # Scroll ----------------------------------------------------------------
             if self.use_native_cursor:
-                self.pyautogui.scroll(-signed_step if current_direction == "down" else abs(signed_step))
+                # pyautogui: + = up, - = down.  signed_step: + = down, - = up.
+                # Move the OS pointer over the viewport first, otherwise the wheel
+                # event lands on whatever is under the cursor (address bar, other
+                # window, etc.).
+                self.pyautogui.moveTo(cx, cy, duration=0.1)
+                self.pyautogui.scroll(-signed_step)
             else:
-                self.driver.execute_script(f"window.scrollBy(0, {signed_step});")
+                # arguments[0] avoids f-string injection and works with numpy/int/float.
+                # behavior:'smooth' gives lazy-loaded content time to render, and
+                # fires the same scroll pipeline Google listens on.
+                self.driver.execute_script(
+                    "window.scrollBy({top: arguments[0], left: 0, behavior: 'smooth'});",
+                    signed_step,
+                )
 
             scrolled += step
-            delay = step_delay if step_delay is not None else self._dynamic_scroll_step_delay()
+            delay = (
+                step_delay
+                if step_delay is not None
+                else self._dynamic_scroll_step_delay()
+            )
             time.sleep(delay)
 
     # ---------- Page exploration helpers ----------

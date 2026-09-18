@@ -74,6 +74,7 @@ def debug(message):
     get_logger().debug(message)
 
 def info(message):
+    message = f"{'-'*10} {message} {'-'*10}" 
     get_logger().info(message)
 
 def warning(message):
