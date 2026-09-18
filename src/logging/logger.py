@@ -40,8 +40,8 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
         logger.handlers.clear()
     
     formatter = logging.Formatter(
-        fmt="%(asctime)s | %(levelname)-8s | %(filename)s:%(lineno)d | %(funcName)s | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
+        fmt="%(asctime)s | %(message)s",
+        datefmt="%H:%M:%S"
     )
     
     file_handler = RotatingFileHandler(
