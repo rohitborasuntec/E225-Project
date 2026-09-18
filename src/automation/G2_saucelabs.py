@@ -92,6 +92,30 @@ class G2SauceLabs:
                 continue
         return None
 
+    def scroll_down(self):
+        try:
+            scroll_distance = random.randint(600, 1000)
+            steps = random.randint(5, 8)
+
+            for _ in range(steps):
+                self.driver.execute_script(
+                    "window.scrollBy(0, arguments[0]);",
+                    scroll_distance / steps
+                )
+                time.sleep(random.uniform(0.05, 0.12))
+
+            time.sleep(random.uniform(0.5, 1.0))
+
+            logger.info(
+                f"Scrolled down {scroll_distance}px"
+            )
+
+            return True
+
+        except Exception as error:
+            logger.warning(f"Scrolling failed: {error}")
+            return False
+
     def scroll_until_result_is_found(self, expected_text):
         """Scroll down in human-sized steps until the exact result is present."""
         for _ in range(self.max_scroll_attempts):
@@ -99,7 +123,8 @@ class G2SauceLabs:
             if result_link is not None:
                 return result_link
 
-            self.human_simulator.scroll_page(total_scroll=250, step_delay=0.25, direction="down")
+            # self.human_simulator.scroll_page(total_scroll=250, step_delay=0.25, direction="down")
+            self.scroll_down()
             time.sleep(2)
 
         return self.find_exact_result_link(expected_text)
@@ -368,6 +393,7 @@ def run():
 
         automation = G2SauceLabs(driver, human_simulator)
         automation.run()
+        # automation.run_g2_saucelabs()
     except Exception:
         # run() already logs + quits; this just prevents double-quit
         raise
