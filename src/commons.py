@@ -9,6 +9,12 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
 import random
+from datetime import date
+from pathlib import Path
+
+start_time = time.time()
+duration=60
+
 
 def wait_for_element(driver, locator, timeout=10, condition="visible", poll=0.5):
     """
@@ -59,25 +65,39 @@ def get_random_word_or_sentence_faker(option):
     else:
         return "Invalid option. Use 'word' or 'sentence'"
 
-def save_html(html_text,file_path):
+# def save_html(html_text,file_name="Test"):
+#     os.makedirs("HTML",exist_ok=True)
+#     file_path = "HTML"/file_name
 
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(html_text)
+#     with open(file_path, "w", encoding="utf-8") as f:
+#         f.write(html_text)
+
+#     logger.info(f"--------HTML SAVED for {file_path}----------")
+
+def save_html(html_text, file_name="Test"):
+    folder_path = Path("HTML")
+    folder_path.mkdir(parents=True, exist_ok=True)
+
+    # Strip any existing extension so we control the final name
+    stem = Path(file_name).stem
+
+    today = date.today().strftime("%Y-%m-%d")
+    final_name = f"{stem}_{today}.html"
+
+    file_path = folder_path / final_name
+    file_path.write_text(html_text, encoding="utf-8")
 
     logger.info(f"--------HTML SAVED for {file_path}----------")
-
 
 # =====================================================
 # TIME HELPER FUNCTIONS
 # =====================================================
-start_time = time.time()
-duration=60
+
 def remaining_time():
     return max(0, duration - (time.time() - start_time))
 
 def time_available(seconds=1):
     return remaining_time() > seconds
-
 
 
 # =====================================================

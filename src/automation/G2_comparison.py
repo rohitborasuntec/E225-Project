@@ -2,7 +2,7 @@ import random
 import time
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
-from ..commons import wait_for_element
+from ..commons import wait_for_element,save_html
 from ..logging import logger
 
 # G2 review page used by the comparison flow.
@@ -21,7 +21,7 @@ class G2Comparison:
     def open_g2_compare_page(self):
 
         logger.info("Opening Sauce Labs reviews page...")
-
+        save_html(self.driver.page_source,"G2_Comparison_Page")
         # self.driver.get(self.g2_reviews_url)
 
         # wait_for_element(self.driver,(By.TAG_NAME, "body"),condition="presence",timeout=30,poll=0.5)

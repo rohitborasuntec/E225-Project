@@ -1,14 +1,12 @@
 import random
 import time
-
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
-from ..commons import wait_for_element
+from ..commons import wait_for_element,save_html
 from src.automation.human_simulator import HumanSimulator
 from src.logging import logger
 
@@ -320,7 +318,6 @@ class G2SauceLabs:
 
             self.human_simulator.input_search_query(query=self.search_query, suggestion=False)
             
-
             result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
                 raise RuntimeError(
@@ -332,6 +329,7 @@ class G2SauceLabs:
             self.human_simulator.mouse_click_after_hover(result_link)
             self._poll(self.switch_to_g2_page, timeout=30, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
+            save_html(self.driver.page_source,"G2_SauceLabs")
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
 
@@ -392,8 +390,7 @@ def run():
         logger.info("Google search submitted")
 
         automation = G2SauceLabs(driver, human_simulator)
-        automation.run()
-        # automation.run_g2_saucelabs()
+        automation.run_g2_saucelabs()
     except Exception:
         # run() already logs + quits; this just prevents double-quit
         raise
