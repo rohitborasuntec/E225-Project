@@ -15,7 +15,8 @@ from src.automation.google_work import GoogleSearch
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from src.automation.G2_comparison import G2Comparison
-from src.automation.G2_saucelabs import G2Page
+from src.automation.G2_page import G2Page
+
 class G2Automation:
 
     def __init__(self,driver,human_simulator,gs):
