@@ -1,747 +1,1125 @@
 import random
 import time
+
 import undetected_chromedriver as uc
+
 from selenium.webdriver.common.by import By
-from ..commons import wait_for_element,save_html
-from ..logging import logger
+from selenium.webdriver.common.action_chains import ActionChains
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    TimeoutException,
+)
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
-# G2 review page used by the comparison flow.
-# Override this value if your target review URL is different.
+from src.commons import (
+    wait_for_element,
+    select_random_visible_text,
+)
+from src.automation.human_simulator import HumanSimulator
+from src.logging import logger
 
-class G2Comparison:
-    # g2_reviews_url = "https://www.g2.com/products/sauce-labs/reviews"
+
+class G2SauceLabs:
+
+    target_text = "Sauce Labs Reviews 2026: Details, Pricing, & Features"
+    search_query = "g2 sauce labs"
+
+    max_scroll_attempts = 4
+
+    top_rated_section_xpath = (
+        '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[2]'
+    )
+
+    alternative_link_xpath = (
+        '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[3]/div[2]/a/div/span'
+    )
+
+    breadcrumb_xpath = '//*[@id="breadcrumbs"]/li[5]/a/span'
+
+    login_modal_close_xpath = (
+        '//*[@id="login-modal"]/div[2]/div/div[2]/button'
+    )
+
+    # Visible text browsing duration
+    visible_text_duration = 60
 
     def __init__(self, driver, human_simulator):
         self.driver = driver
         self.human_simulator = human_simulator
 
-    # ==================================================================
-    # OPEN G2 COMPARE PAGE
-    # ==================================================================
-    def open_g2_compare_page(self):
+        # Start timer when G2 automation starts.
+        # This timer is passed to common.py visible-text function.
+        self.visible_text_start_time = None
 
-        logger.info("Opening Sauce Labs reviews page...")
-        save_html(self.driver.page_source,"G2_Comparison_Page")
-        # self.driver.get(self.g2_reviews_url)
+    # ------------------------------------------------------------------ #
+    # COMMON VISIBLE TEXT
+    # ------------------------------------------------------------------ #
 
-        # wait_for_element(self.driver,(By.TAG_NAME, "body"),condition="presence",timeout=30,poll=0.5)
+    def select_visible_text(self):
+        """
+        Use the common.py visible-text function.
 
-        # time.sleep(random.uniform(3, 5))
+        The actual visible-text detection and JavaScript Range selection
+        are implemented only once in commons.py.
+        """
 
-        # logger.info("Sauce Labs reviews page opened.")
+        if self.visible_text_start_time is None:
+            self.visible_text_start_time = time.time()
 
-        # =====================================================
-        # HANDLE COOKIE CONSENT BANNER
-        # =====================================================
+        return select_random_visible_text(
+            driver=self.driver,
+            duration=self.visible_text_duration,
+            start_time=self.visible_text_start_time,
+        )
 
-        try:
-            cookie_banner = self.driver.find_elements(
-                By.XPATH,
-                '//div[@role="dialog" and @aria-label="Cookie Consent Banner"]',
-            )
+    # ------------------------------------------------------------------ #
+    # SMALL POLLING HELPER
+    # ------------------------------------------------------------------ #
 
-            if cookie_banner:
-                logger.info("Cookie Consent Banner found.")
+    def _poll(self, fn, timeout=30, poll=0.5):
+        """
+        Call fn() until it returns a truthy value.
+        """
 
-                cookie_buttons = cookie_banner[0].find_elements(
-                    By.XPATH, ".//button"
-                )
+        deadline = time.time() + timeout
+        last = None
 
-                for button in cookie_buttons:
-                    try:
-                        if button.is_displayed():
-                            logger.info(
-                                f"Cookie button found: {button.text.strip()}"
-                            )
-                            button.click()
-                            time.sleep(random.randint(1,3))
-                            logger.info("Cookie Consent handled.")
-                            break
-                    except Exception:
-                        continue
+        while time.time() < deadline:
 
-        except Exception as error:
-            logger.warning(f"Cookie Consent handling skipped: {error}")
-
-        # =====================================================
-        # COMPARISON BLOCK
-        # =====================================================
-
-        compare_xpath = '(//div[@class="elv-flex elv-items-center"])[69]'
-
-        logger.info("Searching for comparison block...")
-
-        start_time = time.time()
-
-        while time.time() - start_time < 30:
             try:
-                compare_element = self.driver.find_element(
-                    By.XPATH, compare_xpath
-                )
-                if compare_element.is_displayed():
-                    logger.info("Comparison block found.")
-                    break
+                last = fn()
+
+                if last:
+                    return last
+
             except Exception:
                 pass
 
-            # scroll_page(total_scroll=None, step_delay=None, direction=None)
+            time.sleep(poll)
 
-            self.driver.execute_script(
-                "window.scrollBy(0, arguments[0]);",
-                random.randint(500, 800),
+        raise TimeoutError(
+            f"Condition not met within {timeout}s (last={last!r})"
+        )
+
+    # ------------------------------------------------------------------ #
+    # LOGIN MODAL
+    # ------------------------------------------------------------------ #
+
+    def close_login_modal_if_present(self, timeout=1):
+        """
+        Close G2 login modal if it appears.
+        """
+
+        try:
+
+            modal = WebDriverWait(
+                self.driver,
+                timeout,
+                poll_frequency=0.1,
+            ).until(
+                EC.visibility_of_element_located(
+                    (By.ID, "login-modal")
+                )
             )
 
-            time.sleep(random.uniform(0.5, 1))
+        except TimeoutException:
+            return False
+
+        buttons = modal.find_elements(
+            By.CSS_SELECTOR,
+            "button",
+        )
+
+        visible_buttons = [
+            button
+            for button in buttons
+            if button.is_displayed()
+        ]
+
+        if not visible_buttons:
+
+            close_button = self.driver.find_element(
+                By.XPATH,
+                self.login_modal_close_xpath,
+            )
 
         else:
-            raise Exception("Comparison block was not found.")
 
-        # =====================================================
-        # CLICK COMPARISON BUTTON
-        # =====================================================
+            close_button = max(
+                visible_buttons,
+                key=lambda button: (
+                    button.rect["x"] - button.rect["y"]
+                ),
+            )
 
-        compare_element = wait_for_element(
+        actions = ActionChains(self.driver)
+
+        actions.move_to_element(
+            close_button
+        ).pause(
+            0.05
+        ).click().perform()
+
+        try:
+
+            WebDriverWait(
+                self.driver,
+                2,
+                poll_frequency=0.1,
+            ).until(
+                EC.invisibility_of_element_located(
+                    (By.ID, "login-modal")
+                )
+            )
+
+        except TimeoutException:
+            pass
+
+        logger.info("Closed G2 login modal")
+
+        return True
+
+    # ------------------------------------------------------------------ #
+    # GOOGLE RESULTS
+    # ------------------------------------------------------------------ #
+
+    def find_exact_result_link(self, expected_text):
+        """
+        Find Google result with exactly matching H3 title.
+        """
+
+        headings = self.driver.find_elements(
+            By.CSS_SELECTOR,
+            "a[href] h3",
+        )
+
+        for heading in headings:
+
+            try:
+
+                heading_text = (
+                    heading.text or ""
+                ).strip()
+
+                if heading_text == expected_text:
+
+                    return heading.find_element(
+                        By.XPATH,
+                        "./ancestor::a[1]",
+                    )
+
+            except Exception:
+                continue
+
+        return None
+
+    # ------------------------------------------------------------------ #
+    # SCROLLING
+    # ------------------------------------------------------------------ #
+
+    def scroll_down(self):
+
+        try:
+
+            scroll_distance = random.randint(
+                600,
+                1000,
+            )
+
+            steps = random.randint(
+                5,
+                8,
+            )
+
+            for _ in range(steps):
+
+                self.driver.execute_script(
+                    "window.scrollBy(0, arguments[0]);",
+                    scroll_distance / steps,
+                )
+
+                time.sleep(
+                    random.uniform(
+                        0.05,
+                        0.12,
+                    )
+                )
+
+            time.sleep(
+                random.uniform(
+                    0.5,
+                    1.0,
+                )
+            )
+
+            logger.info(
+                f"Scrolled down {scroll_distance}px"
+            )
+
+            return True
+
+        except Exception as error:
+
+            logger.warning(
+                f"Scrolling failed: {error}"
+            )
+
+            return False
+
+    def scroll_until_result_is_found(
+        self,
+        expected_text,
+    ):
+        """
+        Scroll Google results until exact result is found.
+        """
+
+        for _ in range(
+            self.max_scroll_attempts
+        ):
+
+            result_link = (
+                self.find_exact_result_link(
+                    expected_text
+                )
+            )
+
+            if result_link is not None:
+                return result_link
+
+            self.scroll_down()
+
+            time.sleep(2)
+
+        return self.find_exact_result_link(
+            expected_text
+        )
+
+    # ------------------------------------------------------------------ #
+    # SWITCH TO G2
+    # ------------------------------------------------------------------ #
+
+    def switch_to_g2_page(self):
+        """
+        Switch to G2 page if it opened in current tab
+        or a new tab.
+        """
+
+        for handle in self.driver.window_handles:
+
+            try:
+
+                self.driver.switch_to.window(
+                    handle
+                )
+
+                if "g2.com" in self.driver.current_url:
+
+                    return True
+
+            except Exception:
+                continue
+
+        return False
+
+    # ------------------------------------------------------------------ #
+    # SHOW MORE
+    # ------------------------------------------------------------------ #
+
+    def click_one_random_show_more(self):
+        """
+        Select exactly one random Show More button.
+        """
+
+        self.close_login_modal_if_present(
+            timeout=0.4
+        )
+
+        def show_more_buttons():
+
+            buttons = self.driver.find_elements(
+                By.XPATH,
+                '//button[.//*[@data-elv--accordion--show-more-controller-target="triggerText" '
+                'and normalize-space()="Show More"]]',
+            )
+
+            return [
+                button
+                for button in buttons
+                if button.is_displayed()
+                and button.is_enabled()
+            ]
+
+        try:
+
+            choices = WebDriverWait(
+                self.driver,
+                30,
+            ).until(
+                lambda _: show_more_buttons()
+            )
+
+        except TimeoutException:
+
+            logger.warning(
+                "No Show More button found"
+            )
+
+            return False
+
+        button = random.choice(
+            choices
+        )
+
+        try:
+
+            controller = button.find_element(
+                By.XPATH,
+                './ancestor::*[contains(@data-controller, '
+                '"elv--accordion--show-more-controller")][1]',
+            )
+
+        except Exception:
+
+            controller = None
+
+        panel = None
+        initial_panel_height = 0
+
+        if controller:
+
+            try:
+
+                panels = controller.find_elements(
+                    By.CSS_SELECTOR,
+                    '[data-elv--accordion--show-more-controller-target="panel"]',
+                )
+
+                if panels:
+
+                    panel = panels[0]
+
+                    initial_panel_height = (
+                        panel.size["height"]
+                    )
+
+            except Exception:
+                pass
+
+        def accordion_is_open():
+
+            try:
+
+                trigger_text = button.find_element(
+                    By.CSS_SELECTOR,
+                    '[data-elv--accordion--show-more-controller-target="triggerText"]',
+                ).text.strip()
+
+                if trigger_text == "Show Less":
+
+                    return True
+
+                if button.get_attribute(
+                    "aria-expanded"
+                ) == "true":
+
+                    return True
+
+                if controller:
+
+                    if controller.get_attribute(
+                        "data-elv--accordion--show-more-controller-open-value"
+                    ) == "true":
+
+                        return True
+
+                panel_id = (
+                    button.get_attribute(
+                        "aria-controls"
+                    )
+                    or button.get_attribute(
+                        "aria_controls"
+                    )
+                )
+
+                if panel_id:
+
+                    current_panel = (
+                        self.driver.find_element(
+                            By.ID,
+                            panel_id,
+                        )
+                    )
+
+                    if current_panel.get_attribute(
+                        "aria-hidden"
+                    ) == "false":
+
+                        return True
+
+                if panel is not None:
+
+                    if (
+                        panel.size["height"]
+                        > initial_panel_height + 10
+                    ):
+
+                        return True
+
+            except Exception:
+                return False
+
+            return False
+
+        # -------------------------------------------------------------- #
+        # Human-like mouse click
+        # -------------------------------------------------------------- #
+
+        self.human_simulator.mouse_hover(
+            button
+        )
+
+        self.close_login_modal_if_present(
+            timeout=0.4
+        )
+
+        try:
+
+            self.human_simulator.mouse_click_after_hover(
+                button
+            )
+
+        except ElementClickInterceptedException:
+
+            self.close_login_modal_if_present(
+                timeout=2
+            )
+
+        # -------------------------------------------------------------- #
+        # Verify click
+        # -------------------------------------------------------------- #
+
+        try:
+
+            WebDriverWait(
+                self.driver,
+                2,
+                poll_frequency=0.1,
+            ).until(
+                lambda _: accordion_is_open()
+            )
+
+        except TimeoutException:
+
+            self.close_login_modal_if_present(
+                timeout=2
+            )
+
+            try:
+
+                button.click()
+
+                WebDriverWait(
+                    self.driver,
+                    2,
+                    poll_frequency=0.1,
+                ).until(
+                    lambda _: accordion_is_open()
+                )
+
+            except TimeoutException:
+
+                self.close_login_modal_if_present(
+                    timeout=1
+                )
+
+                self.driver.execute_script(
+                    "arguments[0].click();",
+                    button,
+                )
+
+                try:
+
+                    WebDriverWait(
+                        self.driver,
+                        2,
+                        poll_frequency=0.1,
+                    ).until(
+                        lambda _: accordion_is_open()
+                    )
+
+                except TimeoutException:
+
+                    logger.warning(
+                        "Show More clicked, but G2 did not expose "
+                        "expansion state; continuing"
+                    )
+
+        logger.info(
+            "Clicked one randomly selected Show More button"
+        )
+
+        return True
+
+    # ------------------------------------------------------------------ #
+    # FOLLOW LINK
+    # ------------------------------------------------------------------ #
+
+    def follow_clicked_link(
+        self,
+        old_url,
+        old_handles,
+    ):
+        """
+        Follow clicked link in same tab or new tab.
+        """
+
+        def destination_opened():
+
+            new_handles = (
+                set(self.driver.window_handles)
+                - old_handles
+            )
+
+            if new_handles:
+
+                new_handle = next(
+                    iter(new_handles)
+                )
+
+                self.driver.switch_to.window(
+                    new_handle
+                )
+
+                return (
+                    self.driver.current_url
+                    != "about:blank"
+                )
+
+            return (
+                self.driver.current_url
+                != old_url
+            )
+
+        WebDriverWait(
             self.driver,
-            (By.XPATH, compare_xpath),
-            condition="clickable",
-            timeout=10,
+            30,
+        ).until(
+            lambda _: destination_opened()
+        )
+
+    # ------------------------------------------------------------------ #
+    # TOP-RATED ALTERNATIVE
+    # ------------------------------------------------------------------ #
+
+    def explore_top_rated_alternative(self):
+
+        self.close_login_modal_if_present(
+            timeout=0.4
+        )
+
+        section = wait_for_element(
+            self.driver,
+            (
+                By.XPATH,
+                self.top_rated_section_xpath,
+            ),
+            condition="presence",
             poll=0.5,
         )
 
-        logger.info("Clicking comparison button...")
+        if section is None:
 
-        try:
-            compare_element.click()
-
-        except Exception:
-            logger.warning("Normal click intercepted.")
-
-            try:
-                cookie_banner = self.driver.find_elements(
-                    By.XPATH,
-                    '//div[@role="dialog" and @aria-label="Cookie Consent Banner"]',
-                )
-                if cookie_banner:
-                    cookie_buttons = cookie_banner[0].find_elements(
-                        By.XPATH, ".//button"
-                    )
-                    for button in cookie_buttons:
-                        try:
-                            if button.is_displayed():
-                                button.click()
-                                time.sleep(1)
-                                break
-                        except Exception:
-                            continue
-            except Exception:
-                pass
-
-            compare_element = wait_for_element(
-                self.driver,
-                (By.XPATH, compare_xpath),
-                condition="clickable",
-                timeout=10,
-                poll=0.5,
+            raise RuntimeError(
+                "Top-Rated Alternatives section not found"
             )
 
-            compare_element.click()
+        self.human_simulator.bring_element_into_view_with_wheel(
+            section
+        )
 
-        logger.info("Comparison button clicked.")
+        self.human_simulator.move_mouse_around(
+            moves=3
+        )
 
-        time.sleep(random.uniform(3, 5))
+        self.human_simulator.mouse_hover(
+            section,
+            hover_time=1.0,
+        )
 
-    # ==================================================================
-    # BROWSE COMPARISON PAGE
-    # ==================================================================
-    def browse_comparison_page(self, duration=60):
+        section_lines = (
+            section.text.strip().splitlines()
+        )
 
-        logger.info(f"Browsing comparison page for {duration} seconds...")
+        heading = self.driver.find_elements(
+            By.XPATH,
+            '//*[@id="details"]//*[normalize-space(.)="Top-Rated Alternatives"]',
+        )
 
-        start_time = time.time()
+        if heading:
 
-        # =====================================================
-        # TIME HELPERS
-        # =====================================================
-
-        def remaining_time():
-            return max(0, duration - (time.time() - start_time))
-
-        def time_available(seconds=1):
-            return remaining_time() > seconds
-
-        # =====================================================
-        # CHECK CURRENT VIEWPORT
-        # =====================================================
-
-        def is_in_viewport(element):
-            try:
-                return self.driver.execute_script(
-                    """
-                    const rect = arguments[0].getBoundingClientRect();
-                    return (
-                        rect.top >= 0 &&
-                        rect.bottom <= window.innerHeight &&
-                        rect.left >= 0 &&
-                        rect.right <= window.innerWidth
-                    );
-                    """,
-                    element,
-                )
-            except Exception:
-                return False
-
-        # =====================================================
-        # CLEAR TEXT SELECTION
-        # =====================================================
-
-        def clear_selection():
-            try:
-                self.driver.execute_script(
-                    """
-                    const selection = window.getSelection();
-                    if (selection) {
-                        selection.removeAllRanges();
-                    }
-                    """
-                )
-            except Exception:
-                pass
-
-        # =====================================================
-        # SELECT RANDOM VISIBLE TEXT
-        # =====================================================
-
-        def select_random_visible_text():
-            if not time_available(2):
-                return False
-
-            try:
-                elements = self.driver.find_elements(
-                    By.XPATH,
-                    """
-                    //p[string-length(normalize-space(.)) >= 20]
-                    |
-                    //li[string-length(normalize-space(.)) >= 20]
-                    |
-                    //td[string-length(normalize-space(.)) >= 20]
-                    |
-                    //span[string-length(normalize-space(.)) >= 20]
-                    |
-                    //div[string-length(normalize-space(.)) >= 20]
-                    """,
-                )
-
-                visible_elements = []
-                for element in elements:
-                    try:
-                        if not element.is_displayed():
-                            continue
-                        if not is_in_viewport(element):
-                            continue
-                        text = element.text.strip()
-                        if len(text) < 20:
-                            continue
-                        visible_elements.append(element)
-                    except Exception:
-                        continue
-
-                if not visible_elements:
-                    return False
-
-                element = random.choice(visible_elements)
-                text = element.text.strip()
-                words = text.split()
-
-                if len(words) < 3:
-                    return False
-
-                # ---------------------------------------------
-                # LARGER TEXT SELECTION
-                # ---------------------------------------------
-                if len(words) <= 8:
-                    min_words = 3
-                    max_words = len(words)
-                elif len(words) <= 15:
-                    min_words = 6
-                    max_words = len(words)
-                elif len(words) <= 25:
-                    min_words = 10
-                    max_words = len(words)
-                else:
-                    min_words = 12
-                    max_words = min(35, len(words))
-
-                min_words = min(min_words, len(words))
-                max_words = min(max_words, len(words))
-
-                if min_words > max_words:
-                    min_words = 3
-                    max_words = len(words)
-
-                word_count = random.randint(min_words, max_words)
-                max_start = max(0, len(words) - word_count)
-                start_word = random.randint(0, max_start)
-
-                selected_words = words[start_word:start_word + word_count]
-                selected_text = " ".join(selected_words)
-
-                if not is_in_viewport(element):
-                    return False
-
-                result = self.driver.execute_script(
-                    """
-                    const element = arguments[0];
-                    const selectedText = arguments[1];
-
-                    const walker = document.createTreeWalker(
-                        element, NodeFilter.SHOW_TEXT
-                    );
-
-                    const nodes = [];
-                    let node;
-                    while (node = walker.nextNode()) {
-                        nodes.push(node);
-                    }
-
-                    let fullText = "";
-                    for (const n of nodes) {
-                        fullText += n.textContent;
-                    }
-
-                    const startIndex = fullText.indexOf(selectedText);
-                    if (startIndex === -1) {
-                        return false;
-                    }
-
-                    const endIndex = startIndex + selectedText.length;
-
-                    let position = 0;
-                    let startNode = null;
-                    let endNode = null;
-                    let startOffset = 0;
-                    let endOffset = 0;
-
-                    for (const n of nodes) {
-                        const nodeLength = n.textContent.length;
-                        const nodeStart = position;
-                        const nodeEnd = position + nodeLength;
-
-                        if (
-                            startNode === null &&
-                            startIndex >= nodeStart &&
-                            startIndex <= nodeEnd
-                        ) {
-                            startNode = n;
-                            startOffset = startIndex - nodeStart;
-                        }
-
-                        if (endIndex >= nodeStart && endIndex <= nodeEnd) {
-                            endNode = n;
-                            endOffset = endIndex - nodeStart;
-                            break;
-                        }
-
-                        position += nodeLength;
-                    }
-
-                    if (!startNode || !endNode) {
-                        return false;
-                    }
-
-                    const range = document.createRange();
-                    range.setStart(startNode, startOffset);
-                    range.setEnd(endNode, endOffset);
-
-                    const selection = window.getSelection();
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-
-                    return true;
-                    """,
-                    element,
-                    selected_text,
-                )
-
-                if result:
-                    logger.info(f'Selected visible text: "{selected_text}"')
-                    time.sleep(
-                        min(random.uniform(1.0, 2.0), remaining_time())
-                    )
-                    return True
-
-                return False
-
-            except Exception as error:
-                logger.warning(f"Text selection skipped: {error}")
-                return False
-
-        # =====================================================
-        # CLICK VISIBLE SHOW MORE
-        # =====================================================
-
-        def click_visible_show_more():
-            if not time_available(3):
-                return False
-
-            show_more_xpath = (
-                '//a[@class="a a--md a--subtle '
-                'js-truncate white-space-no-wrap link"]'
+            self.human_simulator.mouse_hover(
+                heading[-1],
+                hover_time=1.0,
             )
 
-            try:
-                links = self.driver.find_elements(By.XPATH, show_more_xpath)
-                visible_show_more = []
-
-                for link in links:
-                    try:
-                        if not link.is_displayed():
-                            continue
-                        if not is_in_viewport(link):
-                            continue
-                        text = link.text.strip().lower()
-                        if "show more" in text:
-                            visible_show_more.append(link)
-                    except Exception:
-                        continue
-
-                if not visible_show_more:
-                    return False
-
-                link = random.choice(visible_show_more)
-                logger.info(f'Clicking Show more: "{link.text.strip()}"')
-                link.click()
-
-                time.sleep(
-                    min(random.uniform(1.0, 1.8), remaining_time())
-                )
-                return True
-
-            except Exception as error:
-                logger.warning(f"Show more skipped: {error}")
-                return False
-
-        # =====================================================
-        # CLICK VISIBLE SHOW LESS
-        # =====================================================
-
-        def click_visible_show_less():
-            if not time_available(2):
-                return False
-
-            show_less_xpath = (
-                '//a[@class="a a--md a--subtle '
-                'js-truncate white-space-no-wrap link"]'
+            logger.info(
+                "Explored section: Top-Rated Alternatives"
             )
 
-            try:
-                links = self.driver.find_elements(By.XPATH, show_less_xpath)
-                visible_show_less = []
+        else:
 
-                for link in links:
-                    try:
-                        if not link.is_displayed():
-                            continue
-                        if not is_in_viewport(link):
-                            continue
-                        text = link.text.strip().lower()
-                        if "show less" in text:
-                            visible_show_less.append(link)
-                    except Exception:
-                        continue
-
-                if not visible_show_less:
-                    return False
-
-                link = random.choice(visible_show_less)
-                logger.info(f'Clicking Show less: "{link.text.strip()}"')
-                link.click()
-
-                time.sleep(
-                    min(random.uniform(0.8, 1.5), remaining_time())
-                )
-                return True
-
-            except Exception as error:
-                logger.warning(f"Show less skipped: {error}")
-                return False
-
-        # =====================================================
-        # SCROLL DOWN
-        # =====================================================
-
-        def scroll_down():
-            if not time_available(1):
-                return False
-
-            try:
-                page_height = self.driver.execute_script(
-                    "return document.body.scrollHeight;"
-                )
-                viewport_height = self.driver.execute_script(
-                    "return window.innerHeight;"
-                )
-                current_position = self.driver.execute_script(
-                    "return window.pageYOffset;"
-                )
-
-                max_scroll = max(0, page_height - viewport_height)
-
-                if current_position >= (max_scroll - 10):
-                    return False
-
-                remaining_distance = max_scroll - current_position
-                distance = random.randint(600, 1000)
-                distance = min(distance, remaining_distance)
-
-                steps = random.randint(5, 8)
-                step_distance = distance / steps
-
-                for _ in range(steps):
-                    if not time_available(0.3):
-                        break
-
-                    self.driver.execute_script(
-                        "window.scrollBy(0, arguments[0]);",
-                        step_distance,
-                    )
-                    time.sleep(
-                        min(random.uniform(0.05, 0.12), remaining_time())
-                    )
-
-                logger.info("Scrolled page.")
-
-                if time_available(0.5):
-                    time.sleep(
-                        min(random.uniform(0.5, 1.0), remaining_time())
-                    )
-
-                return True
-
-            except Exception as error:
-                logger.warning(f"Scroll skipped: {error}")
-                return False
-
-        # =====================================================
-        # INITIAL TEXT SELECTION
-        # =====================================================
-
-        if time_available(2):
-            select_random_visible_text()
-
-        # =====================================================
-        # MAIN LOOP
-        # =====================================================
-
-        action_counter = 1
-
-        while time_available(2):
-            current_position = self.driver.execute_script(
-                "return window.pageYOffset;"
+            logger.info(
+                "Explored supplied card: "
+                f"{section_lines[0] if section_lines else 'unnamed'}"
             )
-            page_height = self.driver.execute_script(
-                "return document.body.scrollHeight;"
-            )
-            viewport_height = self.driver.execute_script(
-                "return window.innerHeight;"
-            )
-            max_scroll = max(0, page_height - viewport_height)
 
-            # =================================================
-            # BOTTOM REACHED
-            # =================================================
+        alternative_label = wait_for_element(
+            self.driver,
+            (
+                By.XPATH,
+                self.alternative_link_xpath,
+            ),
+            condition="presence",
+            poll=0.5,
+        )
 
-            if current_position >= (max_scroll - 15):
-                logger.info("Reached bottom of comparison page.")
-                if time_available(2):
-                    select_random_visible_text()
+        if alternative_label is None:
+
+            raise RuntimeError(
+                "Alternative link not found"
+            )
+
+        alternative_link = (
+            alternative_label.find_element(
+                By.XPATH,
+                "./ancestor::a[1]",
+            )
+        )
+
+        logger.info(
+            f"Alternative: "
+            f"{alternative_link.text.strip()}"
+        )
+
+        self.human_simulator.move_mouse_around(
+            moves=2
+        )
+
+        self.human_simulator.mouse_hover(
+            alternative_link,
+            hover_time=1.0,
+        )
+
+        old_url = self.driver.current_url
+
+        old_handles = set(
+            self.driver.window_handles
+        )
+
+        self.human_simulator.mouse_click_after_hover(
+            alternative_link
+        )
+
+        self.follow_clicked_link(
+            old_url,
+            old_handles,
+        )
+
+        logger.info(
+            f"Opened alternative: "
+            f"{self.driver.current_url}"
+        )
+
+    # ------------------------------------------------------------------ #
+    # BREADCRUMB
+    # ------------------------------------------------------------------ #
+
+    def open_fifth_breadcrumb(self):
+
+        self.close_login_modal_if_present(
+            timeout=0.4
+        )
+
+        breadcrumb_label = wait_for_element(
+            self.driver,
+            (
+                By.XPATH,
+                self.breadcrumb_xpath,
+            ),
+            condition="presence",
+            poll=0.5,
+        )
+
+        if breadcrumb_label is None:
+
+            raise RuntimeError(
+                "Fifth breadcrumb not found"
+            )
+
+        breadcrumb_link = (
+            breadcrumb_label.find_element(
+                By.XPATH,
+                "./ancestor::a[1]",
+            )
+        )
+
+        logger.info(
+            f"Breadcrumb: "
+            f"{breadcrumb_link.text.strip()}"
+        )
+
+        self.human_simulator.move_mouse_around(
+            moves=2
+        )
+
+        self.human_simulator.mouse_hover(
+            breadcrumb_link,
+            hover_time=0.8,
+        )
+
+        old_url = self.driver.current_url
+
+        old_handles = set(
+            self.driver.window_handles
+        )
+
+        self.human_simulator.mouse_click_after_hover(
+            breadcrumb_link
+        )
+
+        self.follow_clicked_link(
+            old_url,
+            old_handles,
+        )
+
+        logger.info(
+            f"Opened breadcrumb: "
+            f"{self.driver.current_url}"
+        )
+
+    # ------------------------------------------------------------------ #
+    # VISIBLE TEXT SELECTION
+    # ------------------------------------------------------------------ #
+
+    def select_text_multiple_times(
+        self,
+        count=3,
+    ):
+        """
+        Reuse common.py's visible-text function.
+
+        This function does not contain any text-selection JavaScript.
+        All visible text selection is handled by commons.py.
+        """
+
+        selected_count = 0
+
+        for _ in range(count):
+
+            remaining = (
+                self.visible_text_duration
+                - (
+                    time.time()
+                    - self.visible_text_start_time
+                )
+            )
+
+            if remaining <= 2:
+
                 break
 
-            # =================================================
-            # TEXT SELECTION
-            # =================================================
-
-            if random.random() < 0.85:
-                if select_random_visible_text():
-                    action_counter += 1
-
-            # =================================================
-            # SHOW MORE
-            # =================================================
-
-            if time_available(4) and random.random() < 0.35:
-                show_more_clicked = click_visible_show_more()
-                if show_more_clicked:
-                    action_counter += 1
-
-                    if time_available(2):
-                        if select_random_visible_text():
-                            action_counter += 1
-
-                    if time_available(2):
-                        if scroll_down():
-                            action_counter += 1
-
-                    if time_available(2):
-                        if click_visible_show_less():
-                            action_counter += 1
-
-                    continue
-
-            # =================================================
-            # NORMAL SCROLL
-            # =================================================
-
-            if time_available(1):
-                if scroll_down():
-                    action_counter += 1
-
-        # =====================================================
-        # FINAL BOTTOM CHECK
-        # =====================================================
-
-        if time_available(0.5):
-            current_position = self.driver.execute_script(
-                "return window.pageYOffset;"
+            result = (
+                self.select_visible_text()
             )
-            page_height = self.driver.execute_script(
-                "return document.body.scrollHeight;"
-            )
-            viewport_height = self.driver.execute_script(
-                "return window.innerHeight;"
-            )
-            max_scroll = max(0, page_height - viewport_height)
 
-            if current_position < max_scroll:
-                self.driver.execute_script(
-                    "window.scrollTo(0, arguments[0]);",
-                    max_scroll,
+            if result:
+
+                selected_count += 1
+
+            # Small human-like pause
+            time.sleep(
+                random.uniform(
+                    0.5,
+                    1.2,
                 )
+            )
 
-        # =====================================================
-        # CLEAR SELECTION
-        # =====================================================
+        return selected_count
 
-        clear_selection()
+    # ------------------------------------------------------------------ #
+    # MAIN G2 AUTOMATION
+    # ------------------------------------------------------------------ #
 
-        elapsed = time.time() - start_time
-        logger.info(f"Browsing completed in {round(elapsed, 2)} seconds.")
-        logger.info(f"Total actions performed: {action_counter}")
-
-    # ==================================================================
-    # COMPLETE SAUCE LABS FLOW
-    # ==================================================================
-    def process_sauce_labs_comparison(self):
-
-        logger.info("=" * 60)
-        logger.info("Starting Sauce Labs comparison flow")
-        logger.info("=" * 60)
-
-        # =====================================================
-        # STEP 1 — Open reviews page and click comparison
-        # =====================================================
-
-        self.open_g2_compare_page()
-        logger.info("Comparison page opened.")
-
-        # =====================================================
-        # STEP 2 — Browse comparison page for 60 seconds
-        # =====================================================
-
-        self.browse_comparison_page(duration=60)
-        logger.info("Comparison page browsing completed.")
-
-        # =====================================================
-        # STEP 3 — CLICK FOOTER LINK
-        # =====================================================
-
-        logger.info("Searching for footer link...")
-
-        footer_xpath = '//div[@id="footer-inner"]/div[2]/ul/li[1]/a'
+    def run_g2_saucelabs(self):
 
         try:
-            footer_link = wait_for_element(
+
+            logger.info(
+                "G2 Sauce Labs automation started"
+            )
+
+            # Start common visible-text timer.
+            self.visible_text_start_time = (
+                time.time()
+            )
+
+            # ---------------------------------------------------------- #
+            # Google result page
+            # ---------------------------------------------------------- #
+
+            wait_for_element(
                 self.driver,
-                (By.XPATH, footer_xpath),
+                (
+                    By.CSS_SELECTOR,
+                    "a[href] h3",
+                ),
                 condition="presence",
-                timeout=15,
                 poll=0.5,
             )
 
-            logger.info("Footer link found.")
-
-            self.driver.execute_script(
-                """
-                arguments[0].scrollIntoView({
-                    behavior: "smooth",
-                    block: "center"
-                });
-                """,
-                footer_link,
+            self.human_simulator.input_search_query(
+                query=self.search_query,
+                suggestion=False,
             )
 
-            time.sleep(random.uniform(1, 2))
+            result_link = (
+                self.scroll_until_result_is_found(
+                    self.target_text
+                )
+            )
 
-            logger.info("Clicking footer link...")
-            footer_link.click()
-            logger.info("Footer link clicked successfully.")
+            if result_link is None:
+
+                raise RuntimeError(
+                    "Could not find the exact Google result: "
+                    f"{self.target_text}"
+                )
+
+            self.human_simulator.move_mouse_around(
+                moves=2
+            )
+
+            self.human_simulator.mouse_hover(
+                result_link,
+                hover_time=1.2,
+            )
+
+            self.human_simulator.mouse_click_after_hover(
+                result_link
+            )
+
+            self._poll(
+                self.switch_to_g2_page,
+                timeout=30,
+                poll=0.3,
+            )
+
+            logger.info(
+                f"Opened result: "
+                f"{self.driver.current_url}"
+            )
+
+            self.close_login_modal_if_present()
+
+            self.human_simulator.move_mouse_around(
+                moves=3
+            )
+
+            # ---------------------------------------------------------- #
+            # G2 page
+            # ---------------------------------------------------------- #
+
+            # Open one Show More section.
+            self.click_one_random_show_more()
+
+            self.close_login_modal_if_present(
+                timeout=0.4
+            )
+
+            # ---------------------------------------------------------- #
+            # Select visible text from G2 page.
+            #
+            # The actual function comes from commons.py.
+            # ---------------------------------------------------------- #
+
+            selected = (
+                self.select_text_multiple_times(
+                    count=3
+                )
+            )
+
+            logger.info(
+                f"Visible text selections on G2 page: "
+                f"{selected}"
+            )
+
+            # ---------------------------------------------------------- #
+            # Explore Top-Rated Alternative
+            # ---------------------------------------------------------- #
+
+            self.human_simulator.move_mouse_around(
+                moves=2
+            )
+
+            self.explore_top_rated_alternative()
+
+            self.close_login_modal_if_present(
+                timeout=0.4
+            )
+
+            # Select visible text on alternative page.
+            selected = (
+                self.select_text_multiple_times(
+                    count=2
+                )
+            )
+
+            logger.info(
+                f"Visible text selections on "
+                f"Alternatives page: {selected}"
+            )
+
+            # ---------------------------------------------------------- #
+            # Open fifth breadcrumb
+            # ---------------------------------------------------------- #
+
+            self.open_fifth_breadcrumb()
+
+            self.close_login_modal_if_present(
+                timeout=0.4
+            )
+
+            # Select visible text after breadcrumb.
+            selected = (
+                self.select_text_multiple_times(
+                    count=2
+                )
+            )
+
+            logger.info(
+                f"Visible text selections after "
+                f"breadcrumb: {selected}"
+            )
+
+            # ---------------------------------------------------------- #
+            # Additional G2 browsing
+            # ---------------------------------------------------------- #
+
+            try:
+
+                browsing = (
+                    self.human_simulator.browse_g2_page()
+                )
+
+                logger.info(
+                    f"Varied G2 browsing: {browsing}"
+                )
+
+            except Exception as error:
+
+                logger.warning(
+                    f"Additional G2 browsing skipped: "
+                    f"{error}"
+                )
+
+            time.sleep(5)
+
+            logger.info(
+                "G2 Sauce Labs automation completed successfully"
+            )
 
         except Exception as error:
-            logger.error(f"Footer link click failed: {error}")
-            return
 
-        # =====================================================
-        # STEP 4 — WAIT FOR NEW PAGE
-        # =====================================================
+            logger.exception(
+                f"G2 Sauce Labs automation failed: "
+                f"{error}"
+            )
 
-        time.sleep(random.uniform(3, 5))
-        logger.info("New page opened.")
-
-        # =====================================================
-        # STEP 5 — BROWSE SECOND PAGE FOR 60 SECONDS
-        # =====================================================
-
-        self.browse_comparison_page(duration=60)
-        logger.info("Second page browsing completed.")
-
-        # =====================================================
-        # COMPLETE
-        # =====================================================
-
-        logger.info("Complete Sauce Labs flow finished.")
-
-    # ==================================================================
-    # RUN
-    # ==================================================================
-    def run_g2_comparisons(self):
-
-        try:
-            self.process_sauce_labs_comparison()
-
-        except Exception as error:
-            logger.error(f"ERROR OCCURRED: {error}")
+            raise
 
         finally:
-            logger.info("Closing browser...")
-            self.driver.quit()
-            logger.info("Browser closed.")
+
+            if self.driver:
+
+                try:
+
+                    self.driver.quit()
+
+                    logger.info(
+                        "Browser closed"
+                    )
+
+                except Exception:
+                    pass
 
 
-if __name__ == "__main__":
-    # Standalone execution: launch an undetected Chrome browser.
-    # For integration with your existing BrowserManager, instantiate
-    # G2Comparison(driver, human_simulator) from your application instead.
+# ---------------------------------------------------------------------- #
+# MODULE LEVEL ENTRY POINT
+# ---------------------------------------------------------------------- #
+
+def run():
+
     options = uc.ChromeOptions()
-    
-    # options.add_argument("--start-maximized")
 
-    driver = uc.Chrome(options=options, version_main=152)
+    options.add_argument(
+        "window-size=1920,1080"
+    )
+
+    options.add_argument(
+        "--disable-blink-features=AutomationControlled"
+    )
+
+    driver = uc.Chrome(
+        options=options,
+        version_main=152,
+    )
 
     try:
-        G2Comparison(driver, human_simulator=None).run_g2_comparisons()
-    except KeyboardInterrupt:
-        logger.info("Stopped by user.")
-    finally:
+
+        logger.info(
+            "Opening Google"
+        )
+
+        driver.get(
+            "https://www.google.com"
+        )
+
+        human_simulator = (
+            HumanSimulator(driver)
+        )
+
+        # Initial Google search.
+        human_simulator.input_search_query(
+            "Sauce Labs Reviews 2026: Details, Pricing, & Features"
+        )
+
+        logger.info(
+            "Google search submitted"
+        )
+
+        automation = G2SauceLabs(
+            driver,
+            human_simulator,
+        )
+
+        # Correct method call.
+        automation.run_g2_saucelabs()
+
+    except Exception as error:
+
+        logger.exception(
+            f"G2 automation failed: {error}"
+        )
+
         try:
             driver.quit()
         except Exception:
             pass
+
+        raise
+
+
+if __name__ == "__main__":
+    run()
