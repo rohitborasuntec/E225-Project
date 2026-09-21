@@ -29,6 +29,7 @@ Requirements:
 
 import os,subprocess
 import platform
+import time
 
 import undetected_chromedriver as uc
 from selenium import webdriver
@@ -49,9 +50,10 @@ class Browser:
         b.quit()
     """
 
-    SUPPORTED = ["Firefox", "Chrome", "Brave", "Opera Mini", "Edge"]
+    SUPPORTED = ["Firefox", "Chrome", "Brave", "Opera Mini", "Edge","DuckDuckGo"]
 
-    def __init__(self, headless: bool = False, user_agent: str | None = None, window_size: tuple[int, int] = (1920, 1080)):
+    # def __init__(self, headless: bool = False, user_agent: str | None = None, window_size: tuple[int, int] = (1920, 1080)):
+    def __init__(self, headless=False, user_agent=None, window_size=(1920, 1080)):
         self.headless = headless
         self.user_agent = user_agent
         self.window_size = window_size
@@ -71,6 +73,7 @@ class Browser:
             "opera mini": self.get_opera,
             "opera": self.get_opera,
             "edge": self.get_edge,
+            "duckduckgo": self.get_duckduckgo,
         }
         if key not in mapping:
             raise ValueError(f"Unsupported browser '{browser_name}'. Choose from {self.SUPPORTED}")
@@ -153,6 +156,16 @@ class Browser:
             use_subprocess=True,
         )
         self._finalize(driver)
+        return driver
+
+    # ---------------------------------------------------------------- #
+    # Duck Duck Go  
+    # ---------------------------------------------------------------- #
+
+    def get_duckduckgo(self):
+        driver = self.get_chrome()
+        driver.get("https://duckduckgo.com/")
+        time.sleep(4)  # Wait for the page to load
         return driver
 
     # ---------------------------------------------------------------- #
@@ -261,7 +274,8 @@ class Browser:
     #     options.set_preference("network.proxy.ssl_port", int(port))
 
     @staticmethod
-    def _find_binary(candidates: dict) -> str | None:
+    # def _find_binary(candidates: dict) -> str | None:
+    def _find_binary(candidates):
         path = candidates.get(platform.system())
         return path if path and os.path.exists(path) else None
 
@@ -274,7 +288,7 @@ if __name__ == "__main__":
     browsers = ["Firefox", "Chrome", "Brave", "Opera Mini", "Edge"]
 
     manager = Browser(headless=False)
-    driver = manager.launch("Chrome")
+    driver = manager.launch("DuckDuckGo")
     driver.get("https://example.com")
     print(driver.title)
     manager.quit()
