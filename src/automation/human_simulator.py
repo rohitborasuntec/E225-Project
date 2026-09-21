@@ -655,36 +655,6 @@ class HumanSimulator:
         logger.warning(f"Could not select one visible {word_count}-word phrase")
         return ""
 
-    def browse_g2_page(self, min_seconds=75, max_seconds=150):
-        """Read, hover, and occasionally inspect one image without continuous scrolling."""
-        duration = random.uniform(min_seconds, max_seconds)
-        deadline = time.monotonic() + duration
-        actions = []
-        image_clicked = False
-        while time.monotonic() < deadline:
-            readable = self._visible_reading_elements()
-            images = [
-                image for image in self.driver.find_elements(By.CSS_SELECTOR, "main img")
-                if image.is_displayed() and image.size["width"] >= 80
-                and image.size["height"] >= 60
-            ]
-            if images and not image_clicked and random.random() < 0.25:
-                image = random.choice(images)
-                self.mouse_hover(image)
-                self.mouse_click_after_hover(image)
-                time.sleep(self._gauss(5, 1, 3, 8))
-                image_clicked = True
-                actions.append("image")
-            elif readable:
-                element = random.choice(readable)
-                self.mouse_hover(element)
-                time.sleep(self._gauss(4, 1, 2, 7))
-                actions.append("read")
-            else:
-                self.move_mouse_around(1)
-                actions.append("wander")
-        return {"seconds": round(duration), "actions": actions, "picture_clicked": image_clicked}
-
     # ---------- Internal helpers ----------
 
     def _idle_pause(self, duration=None):

@@ -1,4 +1,4 @@
-import random
+import random,time
 from src.automation.human_simulator import HumanSimulator
 from src.automation.driver import Browser
 # from src.automation.G2_saucelabs import G2
@@ -9,13 +9,13 @@ from selenium.common.exceptions import (
     NoSuchElementException,
     ElementClickInterceptedException,
 )
-import traceback
+from src.vpn.vpn_automation import ExpressVPN
 from src.logging import logger
 from src.automation.google_work import GoogleSearch
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from src.automation.G2_comparison import G2Comparison
-from src.automation.G2_saucelabs import G2SauceLabs
+from src.automation.G2_saucelabs import G2Page
 class G2Automation:
 
     def __init__(self,driver,human_simulator,gs):
@@ -86,27 +86,41 @@ class G2Automation:
             if not clicked:
                 raise RuntimeError("Could not find/click any element after 10 attempts")
             
-    def run_g2(self):
+    def run_g2(self,product,comparing_product):
         self.random_words()
         self.test_keywords_search()
-        G2SauceLabs(self.driver,self.human_simulator).run_g2_saucelabs()
         
+        G2Page(self.driver,self.human_simulator,product,comparing_product).run_g2_saucelabs()
+    
         G2Comparison(self.driver,self.human_simulator).run_g2_comparisons()
 
 if __name__ == "__main__":
 
     logger.info("Script Has Been Started..............")
 
-    manager = Browser(headless=False)
-    driver = manager.launch("chrome")
-    human_simulator = HumanSimulator(driver)
-
-    gs = GoogleSearch(driver)
-    gs.get_google()
-
-    g2_project = G2Automation(driver,human_simulator,gs)
-    g2_project.run_g2()
+    products = {"SauceLabs":["Ranorex" ,"Testcomplete"] , "BrowserStack":["Testrail" , "Perfecto"]}
     
-    logger.info(f"Process Completed")
+    # vpn = ExpressVPN()
+    # locations = vpn.get_vpn_locations()
+
+    for product,comparing_products in products.items():
+        # vpn.connect(random.choice(locations))
+        manager = Browser(headless=False)
+        driver = manager.launch("chrome")
+
+        human_simulator = HumanSimulator(driver)
     
-    driver.quit()
+        gs = GoogleSearch(driver)
+        gs.get_google()
+
+        for comparing_product in comparing_products:
+            g2_project = G2Automation(driver,human_simulator,gs)
+            g2_project.run_g2(product,comparing_product)
+
+        logger.info(f"Comparison Process Completed for {product} and {comparing_product}")   
+        driver.quit()
+        # vpn.disconnect(random.choice(locations))
+        # time.sleep(5)
+
+    
+    

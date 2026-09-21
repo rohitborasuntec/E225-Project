@@ -17,14 +17,14 @@ from src.automation.human_simulator import HumanSimulator
 from src.logging import logger
 
 
-class G2SauceLabs:
+class G2Page:
 
-    target_text = "Sauce Labs Reviews 2026: Details, Pricing, & Features"
-    search_query = "g2 sauce labs"
-    products = (
-        ("Sauce Labs", "sauce-labs", "g2 sauce labs"),
-        ("BrowserStack", "browserstack", "g2 browser stack"),
-    )
+    target_dic = {
+        "SauceLabs": "Sauce Labs Reviews 2026: Details, Pricing, & Features",
+        "BrowserStack" : "BrowserStack: Most Reliable App & Cross Browser Testing ..."
+    }
+
+    # search_query = "g2 sauce labs"
     max_scroll_attempts = 4
     top_rated_section_xpath = '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[2]'
     alternative_link_xpath = (
@@ -33,10 +33,12 @@ class G2SauceLabs:
     breadcrumb_xpath = '//*[@id="breadcrumbs"]/li[5]/a/span'
     login_modal_close_xpath = '//*[@id="login-modal"]/div[2]/div/div[2]/button'
     
-    def __init__(self, driver, human_simulator):
+    def __init__(self, driver, human_simulator,product,comparing_product):
         self.driver = driver
         self.human_simulator = human_simulator
-
+        self.target_text = self.target_dic[product]
+        self.search_query = f"G2 {product}"
+        self.comparing_product = comparing_product
     # ------------------------------------------------------------------ #
     # small polling helper (replaces WebDriverWait for non-locator cases)
     # ------------------------------------------------------------------ #
@@ -89,16 +91,13 @@ class G2SauceLabs:
     # ------------------------------------------------------------------ #
     # Google results
     # ------------------------------------------------------------------ #
-    def find_exact_result_link(self, product_name, product_slug):
-        """Find the G2 reviews result without depending on the title's year."""
+    def find_exact_result_link(self, expected_text):
+        """Return the Google result link with an exactly matching H3 title."""
         headings = self.driver.find_elements(By.CSS_SELECTOR, "a[href] h3")
         for heading in headings:
             try:
-                title = (heading.text or "").strip().lower()
-                link = heading.find_element(By.XPATH, "./ancestor::a[1]")
-                if (title.startswith(f"{product_name.lower()} reviews")
-                        and "details, pricing" in title):
-                    return link
+                if (heading.text or "").strip() == expected_text:
+                    return heading.find_element(By.XPATH, "./ancestor::a[1]")
             except Exception:
                 continue
         return None
@@ -126,11 +125,11 @@ class G2SauceLabs:
         except Exception as error:
             logger.warning(f"Scrolling failed: {error}")
             return False
-
-    def scroll_until_result_is_found(self, product_name, product_slug):
-        """Scroll down until the requested product's G2 result is present."""
+        
+    def scroll_until_result_is_found(self, expected_text):
+        """Scroll down in human-sized steps until the exact result is present."""
         for _ in range(self.max_scroll_attempts):
-            result_link = self.find_exact_result_link(product_name, product_slug)
+            result_link = self.find_exact_result_link(expected_text)
             if result_link is not None:
                 return result_link
 
@@ -138,16 +137,16 @@ class G2SauceLabs:
             self.scroll_down()
             time.sleep(2)
 
-        return self.find_exact_result_link(product_name, product_slug)
+        return self.find_exact_result_link(expected_text)
 
-    def switch_to_g2_page(self, product_slug):
+    def switch_to_g2_page(self):
         """Switch to the G2 page whether Google opened it here or in a new tab."""
         for handle in self.driver.window_handles:
             self.driver.switch_to.window(handle)
-            if f"g2.com/products/{product_slug}/reviews" in self.driver.current_url:
+            if "g2.com" in self.driver.current_url:
                 return True
         return False
-
+    
     # ------------------------------------------------------------------ #
     # G2 page interactions
     # ------------------------------------------------------------------ #
@@ -315,56 +314,66 @@ class G2SauceLabs:
         self.follow_clicked_link(old_url, old_handles)
         logger.info(f"Opened breadcrumb: {self.driver.current_url}")
 
+
+    def browse_g2_page(self, min_seconds=75, max_seconds=150):
+        """Read, hover, and occasionally inspect one image without continuous scrolling."""
+        duration = random.uniform(min_seconds, max_seconds)
+        deadline = time.monotonic() + duration
+        actions = []
+        image_clicked = False
+        while time.monotonic() < deadline:
+            readable = self._visible_reading_elements()
+            images = [
+                image for image in self.driver.find_elements(By.CSS_SELECTOR, "main img")
+                if image.is_displayed() and image.size["width"] >= 80
+                and image.size["height"] >= 60
+            ]
+            if images and not image_clicked and random.random() < 0.25:
+                image = random.choice(images)
+                self.human_simulator.mouse_hover(image)
+                self.human_simulator.mouse_click_after_hover(image)
+                time.sleep(self._gauss(5, 1, 3, 8))
+                image_clicked = True
+                actions.append("image")
+            elif readable:
+                element = random.choice(readable)
+                self.human_simulator.mouse_hover(element)
+                time.sleep(self._gauss(4, 1, 2, 7))
+                actions.append("read")
+            else:
+                self.human_simulator.move_mouse_around(1)
+                actions.append("wander")
+
+        return {"seconds": round(duration), "actions": actions, "picture_clicked": image_clicked}
+
     # ------------------------------------------------------------------ #
     # entry point
     # ------------------------------------------------------------------ #
     def run_g2_saucelabs(self):
         try:
-            product_name, product_slug, search_query = random.choice(self.products)
-            logger.info(f"Randomly selected G2 product: {product_name}")
-            self._run_product(product_name, product_slug, search_query)
-            logger.info(f"G2 {product_name} automation completed successfully")
-        except Exception as error:
-            logger.exception(f"G2 automation failed: {error}")
-            raise
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logger.info("Browser closed")
+            logger.info("G2 Sauce Labs automation started")
 
-    def _run_product(self, product_name, product_slug, search_query):
-            logger.info(f"G2 {product_name} automation started")
-            self.driver.get("https://www.google.com")
-            self.human_simulator.input_search_query(query=search_query, suggestion=False)
             wait_for_element(
-                self.driver, (By.CSS_SELECTOR, "a[href] h3"),
-                condition="presence", poll=0.5,
+                self.driver,
+                (By.CSS_SELECTOR, "a[href] h3"),
+                condition="presence",
+                poll=0.5,
             )
 
-            result_link = self.scroll_until_result_is_found(product_name, product_slug)
+            self.human_simulator.input_search_query(query=self.search_query, suggestion=False)
+            
+            result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
-                raise RuntimeError(f"Could not find G2 reviews result for {product_name}")
+                raise RuntimeError(
+                    f"Could not find the exact Google result: {self.target_text}"
+                )
 
             self.human_simulator.move_mouse_around(moves=2)
             self.human_simulator.mouse_hover(result_link, hover_time=1.2)
             self.human_simulator.mouse_click_after_hover(result_link)
-            self._poll(lambda: self.switch_to_g2_page(product_slug), timeout=30, poll=0.3)
+            self._poll(self.switch_to_g2_page, timeout=30, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
-            try:
-                self._poll(
-                    lambda: self.driver.find_elements(By.ID, "details"),
-                    timeout=15, poll=0.5,
-                )
-            except TimeoutError as error:
-                page_source = self.driver.page_source.lower()
-                if "captcha-delivery.com" in page_source or "datadome" in page_source:
-                    raise RuntimeError(
-                        f"G2 blocked the {product_name} reviews page with a verification challenge"
-                    ) from error
-                raise RuntimeError(
-                    f"{product_name} reviews content did not load"
-                ) from error
-            save_html(self.driver.page_source, f"G2_{product_slug}")
+            save_html(self.driver.page_source,"G2_SauceLabs")
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
 
@@ -376,7 +385,7 @@ class G2SauceLabs:
             self.click_one_random_show_more()
             self.close_login_modal_if_present(timeout=0.4)
             first_words = self.human_simulator.select_random_words(first_count)
-            logger.info(f"Mouse-selected on {product_name} page: {first_words}")
+            logger.info(f"Mouse-selected on Sauce Labs page: {first_words}")
             self.human_simulator.move_mouse_around(moves=2)
             self.explore_top_rated_alternative()
             self.close_login_modal_if_present(timeout=0.4)
@@ -396,8 +405,14 @@ class G2SauceLabs:
             browsing = self.human_simulator.browse_g2_page()
             logger.info(f"Varied G2 browsing: {browsing}")
             time.sleep(10)
-            logger.info(f"G2 {product_name} automation completed successfully")
-
+            logger.info("G2 Sauce Labs automation completed successfully")
+        except Exception as error:
+            logger.exception(f"G2 Sauce Labs automation failed: {error}")
+            raise
+        finally:
+            if self.driver:
+                self.driver.quit()
+                logger.info("Browser closed")
 
 # ---------------------------------------------------------------------- #
 # module-level entry point (matches old script's `run()`)
@@ -414,7 +429,7 @@ def run():
         driver.get("https://www.google.com")
 
         human_simulator = HumanSimulator(driver)
-        automation = G2SauceLabs(driver, human_simulator)
+        automation = G2Page(driver, human_simulator)
         automation.run_g2_saucelabs()
     except Exception:
         # run() already logs + quits; this just prevents double-quit

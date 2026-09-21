@@ -3,8 +3,12 @@ import subprocess
 import time
 import shutil
 from random import choice
-
+from src.logging import logger
 class ExpressVPN:
+    VPN_LOCATIONS = [
+        "usa", "uk", "germany", "spain", "france",
+        "netherlands", "canada", "australia", "singapore",
+    ]
 
     def __init__(self):
         self.system = platform.system()
@@ -64,21 +68,47 @@ class ExpressVPN:
             "expressvpnctl was not found on Linux."
         )
 
+    # def get_vpn_locations(self):
+    #     result = subprocess.run(
+    #         ["expressvpnctl", "get", "regions"],
+    #         capture_output=True,
+    #         text=True,
+    #         check=True
+    #     )
+
+    #     locations = []
+
+    #     for line in result.stdout.splitlines():
+
+    #         line = line.strip()
+
+    #         if line.contains(["usa","UK","Germany","Spain","France","Netherland","Canada only","Australia","Singapore"]):
+    #             locations.append(line)
+
+    #     return locations
+    
     def get_vpn_locations(self):
-        result = subprocess.run(
-            ["expressvpnctl", "get", "regions"],
-            capture_output=True,
-            text=True,
-            check=True
-        )
+        try:
+            result = subprocess.run(
+                ["expressvpnctl", "get", "regions"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"expressvpnctl failed: {e.stderr}")
+            return []
+        except FileNotFoundError:
+            print("expressvpnctl not found on PATH")
+            return []
 
         locations = []
-
         for line in result.stdout.splitlines():
-
             line = line.strip()
-
-            if line:
+            if not line:
+                continue
+            lower = line.lower()
+            if any(name in lower for name in self.VPN_LOCATIONS):
                 locations.append(line)
 
         return locations
@@ -112,8 +142,9 @@ class ExpressVPN:
 
         if self.system == "Linux":
 
-            # Required if GUI isn't running
             self.run("background", "enable")
+
+        logger.info(f"Using {location}")
 
         self.run("connect", location)
 
