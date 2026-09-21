@@ -22,7 +22,7 @@ class G2SauceLabs:
     target_text = "Sauce Labs Reviews 2026: Details, Pricing, & Features"
     search_query = "g2 sauce labs"
     products = (
-        # ("Sauce Labs", "sauce-labs", "g2 sauce labs"),
+        ("Sauce Labs", "sauce-labs", "g2 sauce labs"),
         ("BrowserStack", "browserstack", "g2 browser stack"),
     )
     max_scroll_attempts = 4
@@ -320,9 +320,10 @@ class G2SauceLabs:
     # ------------------------------------------------------------------ #
     def run_g2_saucelabs(self):
         try:
-            for product_name, product_slug, search_query in self.products:
-                self._run_product(product_name, product_slug, search_query)
-            logger.info("G2 Sauce Labs and BrowserStack automation completed successfully")
+            product_name, product_slug, search_query = random.choice(self.products)
+            logger.info(f"Randomly selected G2 product: {product_name}")
+            self._run_product(product_name, product_slug, search_query)
+            logger.info(f"G2 {product_name} automation completed successfully")
         except Exception as error:
             logger.exception(f"G2 automation failed: {error}")
             raise
