@@ -2,7 +2,7 @@ import random,time
 from src.automation.human_simulator import HumanSimulator
 from src.automation.driver import Browser
 # from src.automation.G2_saucelabs import G2
-from src.commons import get_random_word_or_sentence_faker,wait_for_element
+from src.commons import *
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import (
@@ -37,7 +37,7 @@ class G2Automation:
             wait_for_element(driver, (By.XPATH, '//*[@aria-label="Google"]'), condition="visible")
             self.human_simulator.input_search_query(query)
             wait_for_element(driver, (By.XPATH, '//a[@aria-label="Go to Google Home"]'), condition="visible")
-
+            save_html(html_text=self.driver.page_source,file_name=query)
             clicked = False
 
             for attempt in range(10):
@@ -86,21 +86,21 @@ class G2Automation:
 
             if not clicked:
                 raise RuntimeError("Could not find/click any element after 10 attempts")
-            
+
     def run_g2(self,product,comparing_product):
         self.random_words()
         self.test_keywords_search()
         
         G2Page(self.driver,self.human_simulator,product,comparing_product).run_g2_saucelabs()
     
-        G2Comparison(self.driver,self.human_simulator).run_g2_comparisons()
+        G2Comparison(self.driver,self.human_simulator,comparing_product).run_g2_comparisons()
 
 if __name__ == "__main__":
 
     logger.info("Script Has Been Started..............")
 
     products = {"SauceLabs":["Ranorex" ,"Testcomplete"] , "BrowserStack":["Testrail" , "Perfecto"]}
-    
+
     # vpn = ExpressVPN()
     # locations = vpn.get_vpn_locations()
 

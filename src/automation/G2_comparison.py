@@ -2,8 +2,9 @@ import random
 import time
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
-from ..commons import wait_for_element, save_html, select_random_visible_text
-from ..logging import logger
+from src.commons import *
+from src.automation.human_simulator import HumanSimulator
+from src.logging import logger
 
 # G2 review page used by the comparison flow.
 # Override this value if your target review URL is different.
@@ -11,9 +12,10 @@ from ..logging import logger
 class G2Comparison:
     # g2_reviews_url = "https://www.g2.com/products/sauce-labs/reviews"
 
-    def __init__(self, driver, human_simulator):
+    def __init__(self, driver, human_simulator,comparing_product):
         self.driver = driver
         self.human_simulator = human_simulator
+        self.comparing_product = comparing_product
 
     # ==================================================================
     # OPEN G2 COMPARE PAGE
@@ -66,11 +68,11 @@ class G2Comparison:
         # =====================================================
         # COMPARISON BLOCK
         # =====================================================
-
-        compare_xpath = '(//div[@class="elv-flex elv-items-center"])[69]'
+        
+        compare_xpath = f"//div[@class='inset-card inset-card--sm']//*[contains(text(),'{self.comparing_product}')]/../../..//*[contains(text(),'Compare Now')]//ancestor::a"
 
         logger.info("Searching for comparison block...")
-
+        
         start_time = time.time()
 
         while time.time() - start_time < 30:
@@ -86,10 +88,11 @@ class G2Comparison:
 
             # scroll_page(total_scroll=None, step_delay=None, direction=None)
 
-            self.driver.execute_script(
-                "window.scrollBy(0, arguments[0]);",
-                random.randint(500, 800),
-            )
+            # self.driver.execute_script(
+            #     "window.scrollBy(0, arguments[0]);",
+            #     random.randint(500, 800),
+            # )
+            self.human_simulator.scroll_page()
 
             time.sleep(random.uniform(0.5, 1))
 
@@ -115,7 +118,7 @@ class G2Comparison:
 
         except Exception:
             logger.warning("Normal click intercepted.")
-
+            
             try:
                 cookie_banner = self.driver.find_elements(
                     By.XPATH,
@@ -584,9 +587,19 @@ if __name__ == "__main__":
     # options.add_argument("--start-maximized")
 
     driver = uc.Chrome(options=options, version_main=152)
+    url_dict = {
+        "BrowserStack":"https://www.g2.com/products/browserstack/reviews",
+        "SauceLabs":"https://www.g2.com/products/sauce-labs/reviews"
+    }
+    product = "BrowserStack"
 
+    g2_reviews_url = url_dict[product]
+    driver.get(g2_reviews_url)
+    # products = {"SauceLabs":["Ranorex" ,"Testcomplete"] , "BrowserStack":["Testrail" , "Perfecto"]}
+    comparing_product = "Qase"
+    human_simulator = HumanSimulator(driver)
     try:
-        G2Comparison(driver, human_simulator=None).run_g2_comparisons()
+        G2Comparison(driver, human_simulator,comparing_product).run_g2_comparisons()
     except KeyboardInterrupt:
         logger.info("Stopped by user.")
     finally:
