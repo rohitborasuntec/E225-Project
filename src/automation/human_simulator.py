@@ -9,34 +9,36 @@ from selenium.webdriver.common.keys import Keys
 from src.logging import logger
 
 
+# Defaults for chunked scrolling (can be overridden per call)
+CHUNK_THRESHOLD_VIEWPORTS = 1.5
+MAX_CHUNKS = 5
+
+
 class HumanSimulator:
     def __init__(self, driver, use_native_cursor=False):
-        """
-        use_native_cursor: if True, attempts to use pyautogui to move the REAL
-        OS mouse cursor (visible on screen) instead of Selenium's synthetic
-        in-browser pointer events. Requires pyautogui + a working display
-        (X server / DISPLAY set). Falls back to Selenium ActionChains if
-        unavailable (e.g. headless server, no X display).
-        """
         self.driver = driver
         self.current_x = 0
         self.current_y = 0
         self.use_native_cursor = False
         self.pyautogui = None
+        self._recent_signatures = []
+        self._current_category = None
 
         if use_native_cursor:
             try:
-                import pyautogui  # imported lazily - triggers mouseinfo/X connection
+                import pyautogui
                 self.pyautogui = pyautogui
                 self.use_native_cursor = True
             except Exception as e:
-                # Catches ImportError (not installed) AND runtime errors like
-                # Xlib.error.DisplayConnectionError (no DISPLAY / headless env)
-                print(f"Warning: native cursor mode unavailable ({type(e).__name__}: {e}). "
-                      f"Falling back to Selenium ActionChains (no visible OS cursor movement).")
+                print(
+                    f"Warning: native cursor mode unavailable "
+                    f"({type(e).__name__}: {e}). "
+                    f"Falling back to Selenium ActionChains."
+                )
 
-    # ---------- helper for safe gaussian sampling ----------
-
+    # ==================================================================
+    # EXISTING HELPERS (unchanged)
+    # ==================================================================
     def _gauss(self, mean, stdev, min_val=None, max_val=None):
         val = random.gauss(mean, stdev)
         if min_val is not None:
@@ -44,8 +46,6 @@ class HumanSimulator:
         if max_val is not None:
             val = min(val, max_val)
         return val
-
-    # ---------- Core: human-like mouse path generation ----------
 
     def _bezier_curve(self, start, end, control_points=2, steps=30):
         points = [start]
@@ -76,8 +76,6 @@ class HumanSimulator:
 
     def _ease_in_out(self, t):
         return t * t * (3 - 2 * t)
-
-    # ---------- Dynamic timing calculators ----------
 
     def _dynamic_move_delay(self, distance, steps):
         total_duration = self._gauss(0.15 + distance * 0.0006, 0.05, 0.1, 1.5)
@@ -118,8 +116,6 @@ class HumanSimulator:
     def _dynamic_drift_delay(self):
         return self._gauss(0.2, 0.06, 0.05, 0.4)
 
-    # ---------- Scroll position helpers ----------
-
     def _get_scroll_state(self):
         return self.driver.execute_script(
             "return [document.documentElement.scrollTop || document.body.scrollTop, "
@@ -135,72 +131,19 @@ class HumanSimulator:
         scroll_top, _, _ = self._get_scroll_state()
         return scroll_top > 5
 
-    # ---------- Mouse movement ----------
-
     def _apply_screen_offset(self, browser_x, browser_y):
         win_pos = self.driver.get_window_position()
-        toolbar_offset = 85  # approximate; calibrate for your OS/browser/zoom
+        toolbar_offset = 85
         return win_pos["x"] + browser_x, win_pos["y"] + toolbar_offset + browser_y
 
-    # def move_to_element_like_human(self, element, steps=None, step_delay=None):
-    #     location = element.location_once_scrolled_into_view
-    #     size = element.size
-    #     end_x = location["x"] + size["width"] / 2 + self._gauss(0, 2, -5, 5)
-    #     end_y = location["y"] + size["height"] / 2 + self._gauss(0, 2, -5, 5)
-
-    #     start = (self.current_x, self.current_y)
-    #     end = (end_x, end_y)
-    #     distance = math.hypot(end_x - start[0], end_y - start[1])
-
-    #     steps = steps if steps is not None else int(self._gauss(30, 6, 15, 60))
-    #     control_points = int(self._gauss(2, 0.7, 1, 3))
-    #     path = self._bezier_curve(start, end, control_points=control_points, steps=steps)
-
-    #     if step_delay is None:
-    #         delay_mean, delay_stdev = self._dynamic_move_delay(distance, steps)
-    #     else:
-    #         delay_mean, delay_stdev = step_delay, step_delay * 0.3
-
-    #     if self.use_native_cursor:
-    #         for i, (x, y) in enumerate(path):
-    #             t = self._ease_in_out(i / max(len(path) - 1, 1))
-    #             jitter_x = self._gauss(0, 0.6, -2, 2)
-    #             jitter_y = self._gauss(0, 0.6, -2, 2)
-    #             sx, sy = self._apply_screen_offset(x + jitter_x, y + jitter_y)
-    #             self.pyautogui.moveTo(sx, sy, duration=0)
-    #             step_time = delay_mean * (1.5 - abs(0.5 - t))
-    #             time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
-    #         self.current_x, self.current_y = path[-1]
-    #     else:
-    #         actions = ActionChains(self.driver)
-    #         prev_x, prev_y = start
-    #         for i, (x, y) in enumerate(path):
-    #             t = self._ease_in_out(i / max(len(path) - 1, 1))
-    #             jitter_x = self._gauss(0, 0.6, -2, 2)
-    #             jitter_y = self._gauss(0, 0.6, -2, 2)
-    #             dx = (x - prev_x) + jitter_x
-    #             dy = (y - prev_y) + jitter_y
-    #             actions.move_by_offset(dx, dy)
-    #             prev_x, prev_y = x + jitter_x, y + jitter_y
-    #             step_time = delay_mean * (1.5 - abs(0.5 - t))
-    #             time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
-    #         actions.perform()
-    #         self.current_x, self.current_y = prev_x, prev_y
-    
     def _scroll_element_into_view(self, element, settle_checks=3, settle_delay=0.05):
-        """
-        Scrolls the element to the center of the viewport (avoids sticky headers
-        covering it) and waits for the scroll position to stop changing before
-        proceeding - scrollIntoView can be async/animated in some browsers.
-        """
         self.driver.execute_script(
             "arguments[0].scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});",
             element
         )
-        # Wait for scroll to settle (position stable across consecutive reads)
         last_scroll = None
         stable_count = 0
-        for _ in range(20):  # hard cap to avoid infinite loop
+        for _ in range(20):
             scroll_top = self.driver.execute_script(
                 "return document.documentElement.scrollTop || document.body.scrollTop;"
             )
@@ -214,26 +157,13 @@ class HumanSimulator:
             time.sleep(settle_delay)
 
     def _get_viewport_rect(self, element):
-        """
-        Returns the element's bounding box in VIEWPORT-relative coordinates
-        (matches what ActionChains pointer movement uses), NOT document-relative
-        coordinates (which is what element.location / location_once_scrolled_into_view
-        returns - that mismatch was the root cause of clicks landing on the wrong
-        on-screen element after scrolling).
-        """
-        rect = self.driver.execute_script(
+        return self.driver.execute_script(
             "var r = arguments[0].getBoundingClientRect();"
             "return {x: r.x, y: r.y, width: r.width, height: r.height};",
             element
         )
-        return rect
 
     def _verify_pointer_target(self, x, y, expected_element):
-        """
-        Checks that the element actually under the cursor at (x, y) matches
-        (or is contained within) the intended target, using elementFromPoint -
-        the same viewport coordinate space. Returns True/False.
-        """
         try:
             is_match = self.driver.execute_script(
                 "var el = document.elementFromPoint(arguments[0], arguments[1]);"
@@ -242,17 +172,13 @@ class HumanSimulator:
             )
             return bool(is_match)
         except Exception:
-            return False  # can't verify, caller decides how to handle
+            return False
 
+    # ==================================================================
+    # MOUSE MOVEMENT (unchanged)
+    # ==================================================================
     def move_to_element_like_human(self, element, steps=None, step_delay=None, verify=True):
-        # Ensure element is scrolled into view and not hidden behind sticky headers,
-        # and that the scroll has actually settled before we read coordinates.
         self._scroll_element_into_view(element)
-
-        # Use viewport-relative coordinates (getBoundingClientRect), NOT
-        # element.location / location_once_scrolled_into_view, which are
-        # document-relative and drift from the visible pointer position once
-        # the page has been scrolled.
         rect = self._get_viewport_rect(element)
         end_x = rect["x"] + rect["width"] / 2 + self._gauss(0, 2, -5, 5)
         end_y = rect["y"] + rect["height"] / 2 + self._gauss(0, 2, -5, 5)
@@ -281,9 +207,6 @@ class HumanSimulator:
                 time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
             self.current_x, self.current_y = path[-1]
         else:
-            # Sending dozens of queued pointer moves can make ChromeDriver's
-            # local HTTP command hang until its 120-second timeout. Use one
-            # real WebDriver pointer move with a small natural pause instead.
             self.driver.execute_script(
                 "for (const type of ['mousemove','mouseover','mouseenter']) "
                 "arguments[0].dispatchEvent(new MouseEvent(type, {bubbles:true}));",
@@ -292,12 +215,9 @@ class HumanSimulator:
             time.sleep(self._gauss(0.18, 0.05, 0.08, 0.3))
             self.current_x, self.current_y = end
 
-        # Sanity check: confirm the pointer actually landed on the intended
-        # element. If not (e.g. an overlay/lazy-loaded element shifted things
-        # mid-movement), re-sync coordinates once via a direct correction move.
         if verify and not self.use_native_cursor:
             if not self._verify_pointer_target(self.current_x, self.current_y, element):
-                rect = self._get_viewport_rect(element)  # re-fetch in case layout shifted
+                rect = self._get_viewport_rect(element)
                 corrected_x = rect["x"] + rect["width"] / 2
                 corrected_y = rect["y"] + rect["height"] / 2
                 self.driver.execute_script(
@@ -305,17 +225,20 @@ class HumanSimulator:
                     element,
                 )
                 self.current_x, self.current_y = corrected_x, corrected_y
-    # ---------- Public methods ----------
 
+    # ==================================================================
+    # PUBLIC METHODS (unchanged)
+    # ==================================================================
     def simulate_human_behavior(self, num_actions=None):
         num_actions = num_actions if num_actions is not None else int(self._gauss(2, 0.8, 1, 4))
         for _ in range(num_actions):
             action = random.choice([self.scroll_page, self._idle_pause, self._random_drift])
             action()
 
-    def input_search_query(self, query, char_delay=None, think_pause=None, pre_submit_pause=None,suggestion=True):
+    def input_search_query(self, query, char_delay=None, think_pause=None, pre_submit_pause=None, suggestion=True):
+        input_query = query
 
-        def click_suggestion_box():
+        def click_suggestion_box(search_box):
             try:
                 required_words = input_query.lower().split()
                 suggestions = []
@@ -325,11 +248,11 @@ class HumanSimulator:
                         By.CSS_SELECTOR, 'ul[role="listbox"] li'
                     )
                     suggestions = [
-                        suggestion for suggestion in candidates
-                        if suggestion.is_displayed()
-                        and suggestion.text.strip()
+                        s for s in candidates
+                        if s.is_displayed()
+                        and s.text.strip()
                         and all(
-                            word in suggestion.text.strip().lower()
+                            word in s.text.strip().lower()
                             for word in required_words
                         )
                     ]
@@ -343,15 +266,11 @@ class HumanSimulator:
                 sugg_used = suggestion.text.strip()
                 logger.info(f"Suggestion using for this search {sugg_used}")
                 previous_url = self.driver.current_url
-                self.move_to_element_like_human(
-                    suggestion, steps=10, step_delay=0.01
-                )
+                self.move_to_element_like_human(suggestion, steps=10, step_delay=0.01)
                 time.sleep(self._gauss(0.12, 0.03, 0.06, 0.2))
                 suggestion.click()
                 logger.info(f"{'-' * 10} Clicked {'-' * 10}")
 
-                # Google can fill/highlight a suggestion without submitting it.
-                # Confirm results appeared; otherwise submit with Enter.
                 submitted = False
                 deadline = time.monotonic() + 3
                 while time.monotonic() < deadline:
@@ -366,23 +285,20 @@ class HumanSimulator:
                     search_box.send_keys(Keys.ENTER)
                     logger.info("Suggestion did not submit; pressed Enter")
                 return sugg_used
-            
+
             except Exception as e:
                 logger.info(f"Default Search Input Useing due to {e}")
                 return ""
-        
+
         search_box = self.driver.find_element(By.NAME, "q")
         self.mouse_click(search_box)
         search_box.clear()
-        # is_query_selection = random.choice([True , False])
-        input_query = query
         logger.info(f"Query Used {input_query}")
 
         typo_positions = set()
         words = list(re.finditer(r"[A-Za-z]+", input_query))
-        # Pick either one random word or None, so sometimes the full query is correct.
         selected_word = random.choice(words + [None]) if words else None
-        
+
         if selected_word is not None:
             typo_positions.add(
                 random.randrange(selected_word.start(), selected_word.end())
@@ -401,22 +317,18 @@ class HumanSimulator:
                 search_box.send_keys(char)
             delay = char_delay if char_delay is not None else self._gauss(
                 0.24 if char not in (" ", ",", ".", "!", "?") else 0.38,
-                0.07,
-                0.12,
-                0.5,
+                0.07, 0.12, 0.5,
             )
             time.sleep(delay)
             if random.random() < 0.03:
                 pause = think_pause if think_pause is not None else self._dynamic_think_pause()
                 time.sleep(pause)
-        if suggestion:
-            query_used = click_suggestion_box()
 
+        if suggestion:
+            query_used = click_suggestion_box(search_box)
             if query_used:
                 return query_used
 
-        # No relevant suggestion appeared. Replace any typo and submit the
-        # intended query so later polling waits for the correct result page.
         final_pause = pre_submit_pause if pre_submit_pause is not None else self._gauss(0.6, 0.2, 0.2, 1.5)
         time.sleep(final_pause)
         search_box.clear()
@@ -442,52 +354,15 @@ class HumanSimulator:
         duration = hover_time if hover_time is not None else self._dynamic_hover_time(element)
         time.sleep(duration)
 
-    # def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
-    #     total_scroll = total_scroll if total_scroll is not None else int(self._gauss(700, 200, 200, 1400))
-
-    #     current_direction = direction or random.choice(["down", "down", "up"])
-    #     scrolled = 0
-
-    #     while scrolled < total_scroll:
-    #         can_down = self._can_scroll_down()
-    #         can_up = self._can_scroll_up()
-
-    #         if not can_down and not can_up:
-    #             break
-
-    #         if current_direction == "down" and not can_down:
-    #             current_direction = "up"
-    #         elif current_direction == "up" and not can_up:
-    #             current_direction = "down"
-    #         elif random.random() < 0.08:
-    #             flip_to = "up" if current_direction == "down" else "down"
-    #             if (flip_to == "up" and can_up) or (flip_to == "down" and can_down):
-    #                 current_direction = flip_to
-
-    #         step = self._dynamic_scroll_amount(total_scroll - scrolled)
-    #         signed_step = step if current_direction == "down" else -step
-
-    #         if self.use_native_cursor:
-    #             self.pyautogui.scroll(-signed_step if current_direction == "down" else abs(signed_step))
-    #         else:
-    #             self.driver.execute_script(f"window.scrollBy(0, {signed_step});")
-                
-
-    #         scrolled += step
-    #         delay = step_delay if step_delay is not None else self._dynamic_scroll_step_delay()
-    #         time.sleep(delay)
-
     def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
         total_scroll = (
-            total_scroll
-            if total_scroll is not None
+            total_scroll if total_scroll is not None
             else int(self._gauss(700, 200, 200, 1400))
         )
 
         current_direction = direction or random.choice(["down", "down", "up"])
         scrolled = 0
 
-        # Cache the viewport center once — used only in the native-cursor branch.
         if self.use_native_cursor:
             win = self.driver.get_window_rect()
             cx = win["x"] + win["width"] // 2
@@ -500,7 +375,6 @@ class HumanSimulator:
             if not can_down and not can_up:
                 break
 
-            # Direction arbitration -------------------------------------------------
             if current_direction == "down" and not can_down:
                 current_direction = "up"
             elif current_direction == "up" and not can_up:
@@ -513,44 +387,27 @@ class HumanSimulator:
             step = self._dynamic_scroll_amount(total_scroll - scrolled)
             signed_step = step if current_direction == "down" else -step
 
-            # Scroll ----------------------------------------------------------------
             if self.use_native_cursor:
-                # pyautogui: + = up, - = down.  signed_step: + = down, - = up.
-                # Move the OS pointer over the viewport first, otherwise the wheel
-                # event lands on whatever is under the cursor (address bar, other
-                # window, etc.).
                 self.pyautogui.moveTo(cx, cy, duration=0.1)
                 self.pyautogui.scroll(-signed_step)
             else:
-                # arguments[0] avoids f-string injection and works with numpy/int/float.
-                # behavior:'smooth' gives lazy-loaded content time to render, and
-                # fires the same scroll pipeline Google listens on.
                 self.driver.execute_script(
                     "window.scrollBy({top: arguments[0], left: 0, behavior: 'smooth'});",
                     signed_step,
                 )
 
             scrolled += step
-            delay = (
-                step_delay
-                if step_delay is not None
-                else self._dynamic_scroll_step_delay()
-            )
+            delay = step_delay if step_delay is not None else self._dynamic_scroll_step_delay()
             time.sleep(delay)
 
-    # ---------- Page exploration helpers ----------
-
     def bring_element_into_view_with_wheel(self, element):
-        """Bring a requested element into view using the simulator's scrolling."""
         self._scroll_element_into_view(element)
 
     def mouse_click_after_hover(self, element):
-        """Click an element that has already been reached and hovered."""
         time.sleep(self._gauss(0.4, 0.12, 0.2, 0.7))
         element.click()
 
     def move_mouse_around(self, moves=3):
-        """Move the pointer through a few safe viewport positions."""
         width, height = self.driver.execute_script(
             "return [window.innerWidth, window.innerHeight];"
         )
@@ -581,7 +438,6 @@ class HumanSimulator:
         ) or []
 
     def select_random_words(self, count, already_selected=None):
-        """Select distinct visible words with mouse double-clicks."""
         selected = []
         seen = {word.lower() for word in (already_selected or [])}
         for _ in range(count * 12):
@@ -594,7 +450,7 @@ class HumanSimulator:
                         candidates.append((element, word))
             if not candidates:
                 break
-            element, candidate = random.choice(candidates)
+            element, word = random.choice(candidates)
             self.mouse_hover(element)
             value = self.driver.execute_script(
                 "const root=arguments[0], wanted=arguments[1];"
@@ -605,7 +461,7 @@ class HumanSimulator:
                 "r.setEnd(node,i+wanted.length); const s=getSelection();"
                 "s.removeAllRanges(); s.addRange(r); return s.toString();}} return '';",
                 element,
-                candidate,
+                word,
             ) or ""
             words = re.findall(r"[A-Za-z]+", value)
             if len(words) == 1 and words[0].lower() not in seen:
@@ -619,7 +475,6 @@ class HumanSimulator:
         return selected
 
     def select_text_once(self):
-        """Select one visible phrase containing either 4 or 10-20 words."""
         word_count = random.choice([4, random.randint(10, 20)])
         elements = self._visible_reading_elements()
         random.shuffle(elements)
@@ -655,8 +510,6 @@ class HumanSimulator:
         logger.warning(f"Could not select one visible {word_count}-word phrase")
         return ""
 
-    # ---------- Internal helpers ----------
-
     def _idle_pause(self, duration=None):
         time.sleep(duration if duration is not None else self._dynamic_idle_pause())
 
@@ -672,3 +525,460 @@ class HumanSimulator:
         self.current_x += dx
         self.current_y += dy
         time.sleep(delay if delay is not None else self._dynamic_drift_delay())
+
+    # ==================================================================
+    # RANDOM XPATH BROWSING — POOL-BASED
+    # ==================================================================
+    def _viewport_state(self):
+        try:
+            return self.driver.execute_script(
+                "return [window.pageYOffset, window.innerHeight, document.body.scrollHeight];"
+            )
+        except Exception:
+            return 0, 800, 0
+
+    def _element_rect(self, element):
+        try:
+            return self.driver.execute_script(
+                "const r = arguments[0].getBoundingClientRect();"
+                "return [r.top, r.bottom, r.height];",
+                element,
+            )
+        except Exception:
+            return None
+
+    def is_element_fully_visible(self, element, margin=40):
+        rect = self._element_rect(element)
+        if not rect:
+            return False
+        top, bottom, _ = rect
+        _, vh, _ = self._viewport_state()
+        return top >= margin and bottom <= (vh - margin)
+
+    def _element_signature(self, element):
+        try:
+            return self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const r = el.getBoundingClientRect();
+                return (el.tagName + "|" + (el.className || "") + "|"
+                        + Math.round(r.top) + "|"
+                        + (el.innerText || "").slice(0, 40));
+                """,
+                element,
+            )
+        except Exception:
+            return None
+
+    def _remember_signature(self, signature, max_keep=25):
+        if not signature:
+            return
+        self._recent_signatures.append(signature)
+        if len(self._recent_signatures) > max_keep:
+            self._recent_signatures.pop(0)
+
+    def _is_recent_signature(self, signature):
+        return signature in self._recent_signatures if signature else False
+
+    def resolve_random_element(self, xpath_pool, category_weights=None):
+        """
+        xpath_pool: {category: [xpath, xpath, ...]}
+        category_weights: {category: weight}
+        Returns (category, element) or (None, None).
+        """
+        categories = list(xpath_pool.keys())
+        weights = [(category_weights or {}).get(c, 1) for c in categories]
+
+        attempts = []
+        for _ in range(4):
+            attempts.append(random.choices(categories, weights=weights, k=1)[0])
+        shuffled = categories[:]
+        random.shuffle(shuffled)
+        attempts.extend(shuffled)
+
+        seen = set()
+        for category in attempts:
+            if category in seen:
+                continue
+            seen.add(category)
+
+            xpaths = xpath_pool[category][:]
+            random.shuffle(xpaths)
+
+            for xpath in xpaths:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, xpath)
+                except Exception:
+                    continue
+
+                visible = []
+                for el in elements:
+                    try:
+                        if not el.is_displayed():
+                            continue
+                    except Exception:
+                        continue
+                    sig = self._element_signature(el)
+                    if self._is_recent_signature(sig):
+                        continue
+                    visible.append((el, sig))
+
+                if visible:
+                    el, sig = random.choice(visible)
+                    self._remember_signature(sig)
+                    return category, el
+
+        return None, None
+
+    def scroll_to_element_human(
+        self,
+        element,
+        align="center",
+        chunk_threshold_viewports=CHUNK_THRESHOLD_VIEWPORTS,
+        max_chunks=MAX_CHUNKS,
+    ):
+        rect = self._element_rect(element)
+        if not rect:
+            return False
+
+        top, bottom, height = rect
+        scroll_y, vh, page_h = self._viewport_state()
+
+        if self.is_element_fully_visible(element, margin=60):
+            return True
+
+        if align == "start":
+            target_vp_offset = random.uniform(0.15, 0.25) * vh
+        elif align == "end":
+            target_vp_offset = random.uniform(0.70, 0.85) * vh
+        else:
+            target_vp_offset = random.uniform(0.40, 0.55) * vh
+
+        delta = top - target_vp_offset
+        max_scroll = max(0, page_h - vh)
+        new_y = max(0, min(scroll_y + delta, max_scroll))
+        delta = new_y - scroll_y
+
+        if abs(delta) < 20:
+            return True
+
+        chunk_threshold = chunk_threshold_viewports * vh
+        if abs(delta) > chunk_threshold:
+            self._chunked_scroll_human(delta, vh, max_chunks)
+        else:
+            direction = "down" if delta > 0 else "up"
+            self.scroll_page(total_scroll=abs(int(delta)), direction=direction)
+
+        return True
+
+    def _chunked_scroll_human(self, total_delta, viewport_height, max_chunks=MAX_CHUNKS):
+        direction = "down" if total_delta > 0 else "up"
+        remaining = abs(total_delta)
+
+        chunk_size_base = viewport_height * random.uniform(0.85, 1.15)
+        num_chunks = min(
+            max_chunks,
+            max(2, int(remaining / chunk_size_base) + 1),
+        )
+
+        logger.debug(
+            f"Chunked human scroll: total={int(total_delta)}px, "
+            f"chunks={num_chunks}, dir={direction}"
+        )
+
+        for i in range(num_chunks):
+            if remaining <= 0:
+                break
+
+            if i == num_chunks - 1:
+                chunk = remaining
+            else:
+                chunk = min(remaining, viewport_height * random.uniform(0.8, 1.2))
+
+            self.scroll_page(total_scroll=int(chunk), direction=direction)
+            remaining -= chunk
+
+            if remaining <= 0:
+                break
+
+            time.sleep(random.uniform(0.35, 0.9))
+
+            if random.random() < 0.6:
+                jitter = int(abs(random.gauss(45, 25)))
+                self.scroll_page(total_scroll=jitter, direction=direction)
+
+            if random.random() < 0.25:
+                backtrack = int(abs(random.gauss(70, 30)))
+                flip = "up" if direction == "down" else "down"
+                self.scroll_page(total_scroll=backtrack, direction=flip)
+
+    def random_glance_scroll(self):
+        direction = random.choice(["up", "down"])
+        distance = int(abs(random.gauss(180, 70)))
+        scroll_y, vh, page_h = self._viewport_state()
+        max_scroll = max(0, page_h - vh)
+
+        if direction == "down":
+            if scroll_y >= max_scroll - 10:
+                return False
+            distance = min(distance, max_scroll - scroll_y)
+        else:
+            if scroll_y <= 10:
+                return False
+            distance = min(distance, scroll_y)
+
+        if distance < 40:
+            return False
+
+        self.scroll_page(total_scroll=distance, direction=direction)
+        return True
+
+    def hover_element_human(self, element):
+        try:
+            self.mouse_hover(element)
+            return True
+        except Exception as error:
+            logger.debug(f"Human hover failed: {error}")
+            try:
+                self.driver.execute_script(
+                    "for (const t of ['mouseover','mouseenter','mousemove']) "
+                    "arguments[0].dispatchEvent(new MouseEvent(t, {bubbles:true}));",
+                    element,
+                )
+                return True
+            except Exception:
+                return False
+
+    def hover_jitter(self):
+        try:
+            self._random_drift()
+        except Exception:
+            pass
+
+    def select_text_in_element(self, element, max_chars=180):
+        try:
+            ok = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+                const nodes = [];
+                let node;
+                while ((node = walker.nextNode())) {
+                    if (node.nodeValue && node.nodeValue.trim().length > 0) {
+                        nodes.push(node);
+                    }
+                }
+                if (nodes.length === 0) return false;
+
+                const pick = nodes[Math.floor(Math.random() * nodes.length)];
+                const len = pick.nodeValue.length;
+                const start = Math.floor(Math.random() * Math.max(1, len - 10));
+                const end = Math.min(len, start + Math.min(arguments[1], len - start));
+
+                const range = document.createRange();
+                range.setStart(pick, start);
+                range.setEnd(pick, end);
+
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return true;
+                """,
+                element,
+                max_chars,
+            )
+            if not ok:
+                return False
+            time.sleep(random.uniform(0.3, 0.8))
+            self.clear_selection()
+            return True
+        except Exception:
+            return False
+
+    def clear_selection(self):
+        try:
+            self.driver.execute_script(
+                "const s = window.getSelection(); if (s) s.removeAllRanges();"
+            )
+        except Exception:
+            pass
+
+    def safe_click(self, element):
+        try:
+            try:
+                self.mouse_click(element)
+            except Exception:
+                self.driver.execute_script("arguments[0].click();", element)
+            time.sleep(random.uniform(0.5, 1.2))
+            return True
+        except Exception as error:
+            logger.debug(f"Click failed: {error}")
+            return False
+
+    def dwell_on_element(self, element, category, dwell_config=None, default_dwell=None):
+        cfg = dwell_config or {}
+        default = default_dwell or (2.5, 5.0)
+        min_d, max_d = cfg.get(category, default)
+        dwell = random.uniform(min_d, max_d)
+
+        logger.debug(f"Dwell [{category}] {round(dwell, 2)}s")
+
+        dwell_start = time.time()
+        next_jitter = dwell_start + random.uniform(0.6, 1.2)
+
+        while (time.time() - dwell_start) < dwell:
+            now = time.time()
+
+            if now >= next_jitter:
+                self.hover_jitter()
+                next_jitter = now + random.uniform(0.7, 1.5)
+
+            if random.random() < 0.08:
+                nudge = int(abs(random.gauss(40, 20)))
+                direction = random.choice(["up", "down"])
+                self.scroll_page(total_scroll=nudge, direction=direction)
+
+            if random.random() < 0.05:
+                self.select_text_in_element(element)
+
+            time.sleep(random.uniform(0.15, 0.35))
+
+    def browse_page_randomly(
+        self,
+        duration=60,
+        pool=None,
+        chunk_threshold_viewports=CHUNK_THRESHOLD_VIEWPORTS,
+        max_chunks=MAX_CHUNKS,
+    ):
+        """
+        Full random browsing flow driven by a pool dict:
+            pool = {
+                "xpaths":   {category: [xpath,...]},
+                "weights":  {category: int},
+                "safe_click": {category,...},
+                "dwell":    {category: (min,max)},
+                "default_dwell": (min,max),
+            }
+        Returns an action_log dict.
+        """
+        if not pool or not pool.get("xpaths"):
+            logger.warning("browse_page_randomly: empty pool; skipping.")
+            return {"empty": 1}
+
+        xpath_pool = pool["xpaths"]
+        weights = pool.get("weights") or {}
+        safe_clicks = pool.get("safe_click") or set()
+        dwell_cfg = pool.get("dwell") or {}
+        default_d = pool.get("default_dwell") or (2.5, 5.0)
+
+        logger.info(f"Random XPath browsing for {duration}s...")
+        start_time = time.time()
+
+        def remaining():
+            return max(0, duration - (time.time() - start_time))
+
+        def time_available(seconds=1):
+            return remaining() > seconds
+
+        action_log = {
+            "jump": 0, "chunked": 0, "hover": 0, "click": 0,
+            "glance": 0, "select": 0, "no_scroll": 0,
+            "empty": 0, "dwell": 0,
+        }
+
+        while time_available(2.0):
+            category, element = self.resolve_random_element(xpath_pool, weights)
+
+            if element is None:
+                if self.random_glance_scroll():
+                    action_log["glance"] += 1
+                action_log["empty"] += 1
+                time.sleep(random.uniform(0.3, 0.7))
+                continue
+
+            was_visible = self.is_element_fully_visible(element, margin=60)
+            rect = self._element_rect(element)
+            _, vh, _ = self._viewport_state()
+            will_chunk = False
+            if rect and not was_visible:
+                est_delta = abs(rect[0] - (vh * 0.5))
+                if est_delta > chunk_threshold_viewports * vh:
+                    will_chunk = True
+
+            align = random.choice(["start", "center", "center", "end"])
+            if not self.scroll_to_element_human(
+                element,
+                align=align,
+                chunk_threshold_viewports=chunk_threshold_viewports,
+                max_chunks=max_chunks,
+            ):
+                continue
+
+            if was_visible:
+                action_log["no_scroll"] += 1
+            elif will_chunk:
+                action_log["chunked"] += 1
+            else:
+                action_log["jump"] += 1
+
+            if not time_available(1.5):
+                break
+
+            if self.hover_element_human(element):
+                action_log["hover"] += 1
+                logger.debug(f"Hovered [{category}]")
+
+            if not time_available(1.0):
+                break
+
+            roll = random.random()
+            try:
+                if category in safe_clicks and roll < 0.7:
+                    if self.safe_click(element):
+                        action_log["click"] += 1
+
+                elif category in ("review_cards", "review_body") and roll < 0.55:
+                    if self.select_text_in_element(element):
+                        action_log["select"] += 1
+
+                elif category == "ratings" and roll < 0.4:
+                    if self.select_text_in_element(element):
+                        action_log["select"] += 1
+
+                elif category == "reviewer_names" and roll < 0.35:
+                    if self.select_text_in_element(element):
+                        action_log["select"] += 1
+
+                elif category == "review_titles" and roll < 0.4:
+                    if self.select_text_in_element(element):
+                        action_log["select"] += 1
+
+                elif category == "headings" and roll < 0.3:
+                    if self.select_text_in_element(element):
+                        action_log["select"] += 1
+
+                elif category == "images" and roll < 0.25:
+                    self.hover_element_human(element)
+                    action_log["hover"] += 1
+
+                elif category == "helpful_votes" and roll < 0.3:
+                    if self.select_text_in_element(element):
+                        action_log["select"] += 1
+            except Exception as error:
+                logger.debug(f"Interaction skipped: {error}")
+
+            min_dwell = dwell_cfg.get(category, default_d)[0]
+            if time_available(min_dwell + 0.5):
+                self.dwell_on_element(element, category, dwell_cfg, default_d)
+                action_log["dwell"] += 1
+
+            if random.random() < 0.22 and time_available(2):
+                if self.random_glance_scroll():
+                    action_log["glance"] += 1
+
+            time.sleep(min(random.uniform(0.4, 1.0), remaining()))
+
+        self.clear_selection()
+        elapsed = time.time() - start_time
+        logger.info(f"Browsing completed in {round(elapsed, 2)}s. Summary: {action_log}")
+        return action_log

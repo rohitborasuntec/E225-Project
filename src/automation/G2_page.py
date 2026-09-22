@@ -14,6 +14,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from src.commons import wait_for_element, save_html
 from src.automation.human_simulator import HumanSimulator
+from src.automation.xpath_pools import G2_PRODUCT_POOL
 from src.logging import logger
 
 
@@ -21,10 +22,9 @@ class G2Page:
 
     target_dic = {
         "SauceLabs": "Sauce Labs Reviews 2026: Details, Pricing, & Features",
-        "BrowserStack" : "BrowserStack Reviews 2026: Details, Pricing, & Features"
+        "BrowserStack": "BrowserStack Reviews 2026: Details, Pricing, & Features"
     }
 
-    # search_query = "g2 sauce labs"
     max_scroll_attempts = 4
     top_rated_section_xpath = '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[2]'
     alternative_link_xpath = (
@@ -32,18 +32,15 @@ class G2Page:
     )
     breadcrumb_xpath = '//*[@id="breadcrumbs"]/li[5]/a/span'
     login_modal_close_xpath = '//*[@id="login-modal"]/div[2]/div/div[2]/button'
-    
-    def __init__(self, driver, human_simulator,product,comparing_product):
+
+    def __init__(self, driver, human_simulator, product, comparing_product):
         self.driver = driver
         self.human_simulator = human_simulator
         self.target_text = self.target_dic[product]
         self.search_query = f"G2 {product}"
         self.comparing_product = comparing_product
-    # ------------------------------------------------------------------ #
-    # small polling helper (replaces WebDriverWait for non-locator cases)
-    # ------------------------------------------------------------------ #
+
     def _poll(self, fn, timeout=30, poll=0.5):
-        """Call fn() until it returns something truthy, else raise TimeoutError."""
         deadline = time.time() + timeout
         last = None
         while time.time() < deadline:
@@ -56,11 +53,7 @@ class G2Page:
             time.sleep(poll)
         raise TimeoutError(f"Condition not met within {timeout}s (last={last!r})")
 
-    # ------------------------------------------------------------------ #
-    # login modal (ported from old script)
-    # ------------------------------------------------------------------ #
     def close_login_modal_if_present(self, timeout=1):
-        """Close G2's login modal with the mouse when it appears."""
         try:
             modal = WebDriverWait(self.driver, timeout, poll_frequency=0.1).until(
                 EC.visibility_of_element_located((By.ID, "login-modal"))
@@ -73,13 +66,11 @@ class G2Page:
         if not visible_buttons:
             close_button = self.driver.find_element(By.XPATH, self.login_modal_close_xpath)
         else:
-            # The cross is the visible button nearest the modal's top-right corner.
             close_button = max(
                 visible_buttons,
                 key=lambda b: b.rect["x"] - b.rect["y"],
             )
 
-        # Popup dismissal should be quick: short mouse move, tiny pause, click.
         actions = ActionChains(self.driver)
         actions.move_to_element(close_button).pause(0.05).click().perform()
         WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
@@ -88,11 +79,7 @@ class G2Page:
         logger.info("Closed G2 login modal")
         return True
 
-    # ------------------------------------------------------------------ #
-    # Google results
-    # ------------------------------------------------------------------ #
     def find_exact_result_link(self, expected_text):
-        """Return the Google result link with an exactly matching H3 title."""
         headings = self.driver.find_elements(By.CSS_SELECTOR, "a[href] h3")
         for heading in headings:
             try:
@@ -115,43 +102,29 @@ class G2Page:
                 time.sleep(random.uniform(0.05, 0.12))
 
             time.sleep(random.uniform(0.5, 1.0))
-
-            logger.info(
-                f"Scrolled down {scroll_distance}px"
-            )
-
+            logger.info(f"Scrolled down {scroll_distance}px")
             return True
-
         except Exception as error:
             logger.warning(f"Scrolling failed: {error}")
             return False
-        
+
     def scroll_until_result_is_found(self, expected_text):
-        """Scroll down in human-sized steps until the exact result is present."""
         for _ in range(self.max_scroll_attempts):
             result_link = self.find_exact_result_link(expected_text)
             if result_link is not None:
                 return result_link
-
-            # self.human_simulator.scroll_page(total_scroll=250, step_delay=0.25, direction="down")
             self.scroll_down()
             time.sleep(2)
-
         return self.find_exact_result_link(expected_text)
 
     def switch_to_g2_page(self):
-        """Switch to the G2 page whether Google opened it here or in a new tab."""
         for handle in self.driver.window_handles:
             self.driver.switch_to.window(handle)
             if "g2.com" in self.driver.current_url:
                 return True
         return False
-    
-    # ------------------------------------------------------------------ #
-    # G2 page interactions
-    # ------------------------------------------------------------------ #
+
     def click_one_random_show_more(self):
-        """Choose exactly one Show More control from the available G2 buttons."""
         self.close_login_modal_if_present(timeout=0.4)
 
         def show_more_buttons():
@@ -165,7 +138,6 @@ class G2Page:
         choices = WebDriverWait(self.driver, 30).until(lambda _: show_more_buttons())
         button = random.choice(choices)
 
-        # --- resolve accordion controller + panel for robust open detection ---
         controller = button.find_element(
             By.XPATH,
             './ancestor::*[contains(@data-controller, '
@@ -206,7 +178,6 @@ class G2Page:
                 return False
             return False
 
-        # --- click with fallback chain (human → element → JS) ---
         self.human_simulator.mouse_hover(button)
         self.close_login_modal_if_present(timeout=0.4)
         try:
@@ -219,7 +190,6 @@ class G2Page:
                 lambda _: accordion_is_open()
             )
         except TimeoutException:
-            # Human mouse click may be ignored by G2's Stimulus controller.
             self.close_login_modal_if_present(timeout=2)
             button.click()
             try:
@@ -243,7 +213,6 @@ class G2Page:
         logger.info("Clicked one randomly selected Show More button")
 
     def follow_clicked_link(self, old_url, old_handles):
-        """Follow a mouse-clicked link in either the current tab or a new tab."""
         def destination_opened():
             new_handles = set(self.driver.window_handles) - old_handles
             if new_handles:
@@ -254,7 +223,6 @@ class G2Page:
         WebDriverWait(self.driver, 30).until(lambda _: destination_opened())
 
     def explore_top_rated_alternative(self):
-        """Explore the supplied card with the mouse, then open its alternative."""
         self.close_login_modal_if_present(timeout=0.4)
         section = wait_for_element(
             self.driver,
@@ -296,7 +264,6 @@ class G2Page:
         logger.info(f"Opened alternative: {self.driver.current_url}")
 
     def open_fifth_breadcrumb(self):
-        """Click the fifth breadcrumb using mouse movement and mouse click."""
         self.close_login_modal_if_present(timeout=0.4)
         breadcrumb_label = wait_for_element(
             self.driver,
@@ -314,15 +281,29 @@ class G2Page:
         self.follow_clicked_link(old_url, old_handles)
         logger.info(f"Opened breadcrumb: {self.driver.current_url}")
 
-
     def browse_g2_page(self, min_seconds=75, max_seconds=150):
-        """Read, hover, and occasionally inspect one image without continuous scrolling."""
+        """
+        Now delegates to HumanSimulator.browse_page_randomly with the
+        G2 product page pool. Falls back to the old behavior if the pool
+        is empty.
+        """
+        if not G2_PRODUCT_POOL.get("xpaths"):
+            return self._legacy_browse(min_seconds, max_seconds)
+        duration = random.uniform(min_seconds, max_seconds)
+        logger.info(f"browse_g2_page duration={round(duration, 1)}s (pool-driven)")
+        return self.human_simulator.browse_page_randomly(
+            duration=duration,
+            pool=G2_PRODUCT_POOL,
+        )
+
+    def _legacy_browse(self, min_seconds=75, max_seconds=150):
+        """Old browse behavior kept as a fallback."""
         duration = random.uniform(min_seconds, max_seconds)
         deadline = time.monotonic() + duration
         actions = []
         image_clicked = False
         while time.monotonic() < deadline:
-            readable = self._visible_reading_elements()
+            readable = self.human_simulator._visible_reading_elements()
             images = [
                 image for image in self.driver.find_elements(By.CSS_SELECTOR, "main img")
                 if image.is_displayed() and image.size["width"] >= 80
@@ -332,13 +313,13 @@ class G2Page:
                 image = random.choice(images)
                 self.human_simulator.mouse_hover(image)
                 self.human_simulator.mouse_click_after_hover(image)
-                time.sleep(self._gauss(5, 1, 3, 8))
+                time.sleep(random.uniform(3, 8))
                 image_clicked = True
                 actions.append("image")
             elif readable:
                 element = random.choice(readable)
                 self.human_simulator.mouse_hover(element)
-                time.sleep(self._gauss(4, 1, 2, 7))
+                time.sleep(random.uniform(2, 7))
                 actions.append("read")
             else:
                 self.human_simulator.move_mouse_around(1)
@@ -346,9 +327,6 @@ class G2Page:
 
         return {"seconds": round(duration), "actions": actions, "picture_clicked": image_clicked}
 
-    # ------------------------------------------------------------------ #
-    # entry point
-    # ------------------------------------------------------------------ #
     def run_g2_saucelabs(self):
         try:
             logger.info("G2 Sauce Labs automation started")
@@ -361,7 +339,7 @@ class G2Page:
             )
 
             self.human_simulator.input_search_query(query=self.search_query, suggestion=False)
-            
+
             result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
                 raise RuntimeError(
@@ -373,7 +351,7 @@ class G2Page:
             self.human_simulator.mouse_click_after_hover(result_link)
             self._poll(self.switch_to_g2_page, timeout=30, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
-            save_html(self.driver.page_source,"G2_SauceLabs")
+            save_html(self.driver.page_source, "G2_SauceLabs")
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
 
@@ -387,7 +365,6 @@ class G2Page:
             first_words = self.human_simulator.select_random_words(first_count)
             logger.info(f"Mouse-selected on Sauce Labs page: {first_words}")
             self.human_simulator.move_mouse_around(moves=2)
-            # self.explore_top_rated_alternative()
             self.close_login_modal_if_present(timeout=0.4)
             second_words = self.human_simulator.select_random_words(
                 second_count, already_selected=first_words
@@ -395,7 +372,7 @@ class G2Page:
             logger.info(f"Mouse-selected on Alternatives page: {second_words}")
             try:
                 self.open_fifth_breadcrumb()
-            except:
+            except Exception:
                 logger.error("Not Found fifth breadcrumb")
             final_words = self.human_simulator.select_random_words(
                 final_count, already_selected=first_words + second_words
@@ -408,7 +385,7 @@ class G2Page:
             try:
                 browsing = self.browse_g2_page()
                 logger.info(f"Varied G2 browsing: {browsing}")
-            except:
+            except Exception:
                 logger.error("Browse g2 error")
             time.sleep(10)
             logger.info("G2 Sauce Labs automation completed successfully")
@@ -420,9 +397,7 @@ class G2Page:
                 self.driver.quit()
                 logger.info("Browser closed")
 
-# ---------------------------------------------------------------------- #
-# module-level entry point (matches old script's `run()`)
-# ---------------------------------------------------------------------- #
+
 def run():
     options = uc.ChromeOptions()
     options.add_argument("window-size=1920,1080")
@@ -435,12 +410,11 @@ def run():
         driver.get("https://www.google.com")
 
         human_simulator = HumanSimulator(driver)
-        product = "BrowserStack" 
+        product = "BrowserStack"
         comparing_product = "Testrail"
-        automation = G2Page(driver, human_simulator,product,comparing_product)
+        automation = G2Page(driver, human_simulator, product, comparing_product)
         automation.run_g2_saucelabs()
     except Exception:
-        # run() already logs + quits; this just prevents double-quit
         raise
 
 
