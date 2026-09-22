@@ -21,7 +21,7 @@ class G2Page:
 
     target_dic = {
         "SauceLabs": "Sauce Labs Reviews 2026: Details, Pricing, & Features",
-        "BrowserStack" : "BrowserStack: Most Reliable App & Cross Browser Testing ..."
+        "BrowserStack" : "BrowserStack Reviews 2026: Details, Pricing, & Features"
     }
 
     # search_query = "g2 sauce labs"
@@ -387,13 +387,16 @@ class G2Page:
             first_words = self.human_simulator.select_random_words(first_count)
             logger.info(f"Mouse-selected on Sauce Labs page: {first_words}")
             self.human_simulator.move_mouse_around(moves=2)
-            self.explore_top_rated_alternative()
+            # self.explore_top_rated_alternative()
             self.close_login_modal_if_present(timeout=0.4)
             second_words = self.human_simulator.select_random_words(
                 second_count, already_selected=first_words
             )
             logger.info(f"Mouse-selected on Alternatives page: {second_words}")
-            self.open_fifth_breadcrumb()
+            try:
+                self.open_fifth_breadcrumb()
+            except:
+                logger.error("Not Found fifth breadcrumb")
             final_words = self.human_simulator.select_random_words(
                 final_count, already_selected=first_words + second_words
             )
@@ -402,8 +405,11 @@ class G2Page:
                 f"Total distinct words selected: "
                 f"{len(first_words + second_words + final_words)}"
             )
-            browsing = self.human_simulator.browse_g2_page()
-            logger.info(f"Varied G2 browsing: {browsing}")
+            try:
+                browsing = self.browse_g2_page()
+                logger.info(f"Varied G2 browsing: {browsing}")
+            except:
+                logger.error("Browse g2 error")
             time.sleep(10)
             logger.info("G2 Sauce Labs automation completed successfully")
         except Exception as error:
@@ -429,7 +435,9 @@ def run():
         driver.get("https://www.google.com")
 
         human_simulator = HumanSimulator(driver)
-        automation = G2Page(driver, human_simulator)
+        product = "BrowserStack" 
+        comparing_product = "Testrail"
+        automation = G2Page(driver, human_simulator,product,comparing_product)
         automation.run_g2_saucelabs()
     except Exception:
         # run() already logs + quits; this just prevents double-quit
