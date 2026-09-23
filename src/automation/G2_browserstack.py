@@ -411,13 +411,14 @@ class BrowserStackReviews:
         heading = WebDriverWait(self.driver, 15).until(
             EC.presence_of_element_located((By.XPATH, self.heading_xpath))
         )
+        logger.info("Moving to BrowserStack Reviews section with mouse wheel")
         wheel_to_element(self.driver, heading)
         review_text = WebDriverWait(self.driver, 5).until(
             EC.visibility_of_element_located((By.XPATH, self.text_xpath))
         )
-        hover_with_mouse(
-            self.driver, review_text, random.uniform(0.4, 1.3)
-        )
+        hover_time = random.uniform(0.4, 1.3)
+        logger.info(f"Moving mouse over BrowserStack review text for {hover_time:.1f}s")
+        hover_with_mouse(self.driver, review_text, hover_time)
         try:
             phrase = select_visible_phrase_with_mouse(
                 self.driver,
@@ -443,6 +444,7 @@ class BrowserStackReviewCard:
         review = WebDriverWait(self.driver, 12).until(
             EC.visibility_of_element_located((By.XPATH, self.review_xpath))
         )
+        logger.info("Moving to targeted BrowserStack review with mouse wheel")
         wheel_to_element(self.driver, review)
         text_candidates = [
             element for element in review.find_elements(By.CSS_SELECTOR, "p, h3, h4, span")
@@ -454,7 +456,9 @@ class BrowserStackReviewCard:
             )
         ]
         target = random.choice(text_candidates) if text_candidates else review
-        hover_with_mouse(self.driver, target, random.uniform(0.5, 1.5))
+        hover_time = random.uniform(0.5, 1.5)
+        logger.info(f"Moving mouse over random targeted review text for {hover_time:.1f}s")
+        hover_with_mouse(self.driver, target, hover_time)
         phrase = select_visible_phrase_with_mouse(
             self.driver,
             target,
@@ -468,7 +472,7 @@ class BrowserStackReviewCard:
 class BrowserStackReviewsScrollArea:
     """Read the reviews area with a varied native-mouse scroll pattern."""
 
-    area_xpath = '//*[@id="reviews-and-filters"]/div'
+    area_xpath = '//*[@id="reviews-and-filters"]/div/div[3]/div'
 
     def __init__(self, driver):
         self.driver = driver
@@ -477,12 +481,41 @@ class BrowserStackReviewsScrollArea:
         area = WebDriverWait(self.driver, 15).until(
             EC.presence_of_element_located((By.XPATH, self.area_xpath))
         )
+        logger.info("Found BrowserStack Reviews reading and scroll area")
+        read_more = [
+            element for element in area.find_elements(
+                By.XPATH,
+                './/*[self::button or self::a or @role="button"]'
+                '[contains(translate(normalize-space(.), '
+                '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), '
+                '"read more")]',
+            )
+            if element.is_displayed()
+        ]
+        if read_more:
+            target = random.choice(read_more)
+            logger.info(f"Selected one Read More from {len(read_more)} available controls")
+            logger.info("Moving to selected Read More with mouse wheel")
+            wheel_to_element(self.driver, target)
+            hover_time = random.uniform(0.4, 1.2)
+            logger.info(f"Hovering over selected Read More for {hover_time:.1f}s")
+            hover_with_mouse(self.driver, target, hover_time)
+            pre_click_pause = random.uniform(0.3, 1.0)
+            logger.info(f"Pausing {pre_click_pause:.1f}s before Read More click")
+            time.sleep(pre_click_pause)
+            click_with_mouse(self.driver, target)
+            logger.info("Clicked one random review Read More with mouse")
+            time.sleep(random.uniform(0.7, 1.8))
+        else:
+            logger.warning("No review Read More control was available")
+
         directions = []
-        target_moves = random.randint(7, 12)
+        target_moves = random.randint(3, 6)
         while len(directions) < target_moves:
             directions.extend([1] * random.randint(1, 3))
             directions.extend([-1] * random.randint(1, 2))
         directions = directions[:target_moves]
+        logger.info(f"Created random Reviews pattern with {target_moves} mouse scrolls")
         selection_step = (
             random.randrange(1, target_moves)
             if target_moves > 1 and random.random() < 0.55
@@ -501,8 +534,12 @@ class BrowserStackReviewsScrollArea:
             ]
             if visible_text:
                 reading_text = random.choice(visible_text)
+                hover_time = random.uniform(0.4, 1.0)
+                logger.info(
+                    f"Moving mouse over random review text for {hover_time:.1f}s"
+                )
                 hover_with_mouse(
-                    self.driver, reading_text, random.uniform(0.7, 1.4)
+                    self.driver, reading_text, hover_time
                 )
                 if step_index == selection_step:
                     try:
@@ -515,7 +552,9 @@ class BrowserStackReviewsScrollArea:
                         logger.info(f"Mouse-selected random review text: {phrase!r}")
                     except RuntimeError as error:
                         logger.warning(f"Skipped random review text selection: {error}")
-            time.sleep(random.uniform(2.5, 5.5))
+            reading_time = random.uniform(0.6, 1.6)
+            logger.info(f"Reading visible review text for {reading_time:.1f}s")
+            time.sleep(reading_time)
             bounds = self.driver.execute_script(
                 "const r=arguments[0].getBoundingClientRect();"
                 "return {top:r.top,bottom:r.bottom,height:innerHeight};", area
@@ -526,13 +565,88 @@ class BrowserStackReviewsScrollArea:
                 direction = -1
             else:
                 direction = planned_direction
+            distance = random.randint(110, 260)
+            logger.info(
+                f"Reviews mouse scroll {step_index}/{target_moves}: "
+                f"{'down' if direction > 0 else 'up'} {distance}px"
+            )
             scroll_with_mouse(
                 self.driver,
-                direction * random.randint(110, 260),
+                direction * distance,
                 area=area,
             )
-            time.sleep(random.uniform(0.4, 0.9))
+            time.sleep(random.uniform(0.2, 0.6))
         logger.info("Finished BrowserStack Reviews scroll pass")
+
+
+class BrowserStackReviewsPagination:
+    """Open one random numbered reviews page using the native mouse."""
+
+    pagination_xpath = '//*[@id="reviews-and-filters"]/div/div[3]/div/div/ul'
+
+    def __init__(self, driver):
+        self.driver = driver
+
+    def explore(self):
+        pagination = WebDriverWait(self.driver, 15).until(
+            EC.visibility_of_element_located((By.XPATH, self.pagination_xpath))
+        )
+        logger.info("Found BrowserStack Reviews pagination")
+        logger.info("Moving to Reviews pagination with mouse wheel")
+        wheel_to_element(self.driver, pagination)
+        page_links = [
+            link for link in pagination.find_elements(
+                By.CSS_SELECTOR, "li.pagination__page-number a"
+            )
+            if link.is_displayed() and (link.text or "").strip().isdigit()
+        ]
+        if not page_links:
+            logger.warning("No clickable numbered Reviews pages were available")
+            return
+
+        target = random.choice(page_links)
+        page_number = (target.text or "").strip()
+        logger.info(
+            f"Randomly selected Reviews page {page_number} from {len(page_links)} pages"
+        )
+        hover_time = random.uniform(0.4, 1.2)
+        logger.info(f"Hovering over Reviews page {page_number} for {hover_time:.1f}s")
+        hover_with_mouse(self.driver, target, hover_time)
+        old_url = self.driver.current_url
+        click_with_mouse(self.driver, target)
+        logger.info(f"Clicked Reviews page {page_number} with mouse")
+        try:
+            WebDriverWait(self.driver, 8, poll_frequency=0.2).until(
+                lambda driver: driver.current_url != old_url
+            )
+            logger.info(f"Opened Reviews page {page_number}")
+        except TimeoutException:
+            logger.warning(f"Reviews page {page_number} navigation was not confirmed")
+        view_time = random.uniform(1.5, 4.0)
+        logger.info(f"Viewing Reviews page {page_number} for {view_time:.1f}s")
+        time.sleep(view_time)
+        logger.info(f"Finished viewing Reviews page {page_number}")
+
+
+class TopRatedAlternatives:
+    """Reach the Top-Rated Alternatives section using the native mouse wheel."""
+
+    section_xpath = '//*[@id="additional_information"]/div/div[3]/div[1]/div[1]'
+
+    def __init__(self, driver):
+        self.driver = driver
+
+    def explore(self):
+        section = WebDriverWait(self.driver, 15).until(
+            EC.visibility_of_element_located((By.XPATH, self.section_xpath))
+        )
+        logger.info("Found Top-Rated Alternatives section")
+        logger.info("Scrolling to Top-Rated Alternatives with mouse wheel")
+        wheel_to_element(self.driver, section)
+        hover_time = random.uniform(0.4, 1.2)
+        logger.info(f"Moving mouse over Top-Rated Alternatives for {hover_time:.1f}s")
+        hover_with_mouse(self.driver, section, hover_time)
+        logger.info("Reached Top-Rated Alternatives section")
 
 
 class G2BrowserStack(G2Page):
@@ -563,17 +677,48 @@ class G2BrowserStack(G2Page):
         return True
 
     def explore_reviews(self):
-        """Inspect two review areas, then always run the full scroll area."""
-        try:
-            BrowserStackReviews(self.driver).explore()
-        except (RuntimeError, TimeoutException) as error:
-            logger.warning(f"Skipped brief BrowserStack Reviews view: {error}")
-        try:
-            BrowserStackReviewCard(self.driver).explore()
-        except (RuntimeError, TimeoutException) as error:
-            logger.warning(f"Skipped targeted BrowserStack review: {error}")
-        logger.info("Starting BrowserStack Reviews scroll area")
-        BrowserStackReviewsScrollArea(self.driver).explore()
+        """Run a random subset of review interactions in safe page order."""
+        started_at = time.monotonic()
+        target_duration = random.uniform(20, 40)
+        logger.info(
+            f"Random Reviews interaction target: {target_duration:.1f}s"
+        )
+        interactions = [
+            ("BrowserStack Reviews", BrowserStackReviews(self.driver).explore),
+            ("Targeted Review", BrowserStackReviewCard(self.driver).explore),
+            ("Reviews Scroll Area", BrowserStackReviewsScrollArea(self.driver).explore),
+            ("Reviews Pagination", BrowserStackReviewsPagination(self.driver).explore),
+            ("Top-Rated Alternatives", TopRatedAlternatives(self.driver).explore),
+        ]
+        selected_count = random.randint(2, len(interactions))
+        selected_indexes = set(
+            random.sample(range(len(interactions)), selected_count)
+        )
+        selected_names = [
+            name for index, (name, _) in enumerate(interactions)
+            if index in selected_indexes
+        ]
+        logger.info(f"Randomly selected interaction classes: {selected_names}")
+
+        for index, (name, action) in enumerate(interactions):
+            if index not in selected_indexes:
+                logger.info(f"Randomly skipped interaction class: {name}")
+                continue
+            logger.info(f"Starting interaction class: {name}")
+            try:
+                action()
+                logger.info(f"Completed interaction class: {name}")
+            except (RuntimeError, TimeoutException) as error:
+                logger.warning(f"Skipped unavailable interaction class {name}: {error}")
+        elapsed = time.monotonic() - started_at
+        remaining = target_duration - elapsed
+        if remaining > 0:
+            logger.info(f"Reading final section for {remaining:.1f}s")
+            time.sleep(remaining)
+        logger.info(
+            f"Completed randomized Reviews process in "
+            f"{time.monotonic() - started_at:.1f}s"
+        )
 
     def find_exact_result_link(self, expected_text):
         """Match BrowserStack's review result even if G2 changes the year."""
