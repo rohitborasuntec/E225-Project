@@ -1,5 +1,5 @@
 import random
-import time
+import traceback
 import sys
 from pathlib import Path
 
@@ -21,7 +21,7 @@ from src.automation.google_work import GoogleSearch
 from selenium.common.exceptions import TimeoutException
 from src.automation.G2_comparison import G2Comparison
 from src.automation.G2_page import G2Page
-
+from src.excel import Excel
 
 class G2Automation:
 
@@ -29,102 +29,67 @@ class G2Automation:
         self.driver = driver
         self.human_simulator = human_simulator
         self.gs = gs
+        self.items = {}
+        self.excel = Excel()
 
-    def random_words(self):
-        CATEGORIES = ['word', 'name', 'country', 'movie', 'music',
-                      'sports', 'technology', 'News']
 
-        logger.info("Searching for 2 Random Searches")
-        keywords = random.choices(CATEGORIES, k=2)
+    def set_data(self, product, comparing_product,browser,location,status):
+        self.items["Link"] = ""
+        self.items["First product"] = product
+        self.items["Second product"] = comparing_product
+        self.items["Browser Name"] = browser
+        self.items["Country Name"] = location
+        self.items["Version Number"] = ""
+        self.items["Status"] = status
 
-        for keyword in keywords:
-            query = get_random_word_or_sentence_faker(keyword).lower()
 
-            wait_for_element(
-                self.driver,
-                (By.XPATH, '//*[@aria-label="Google"]'),
-                condition="visible",
-            )
-            self.human_simulator.input_search_query(query)
-            wait_for_element(
-                self.driver,
-                (By.XPATH, '//a[@aria-label="Go to Google Home"]'),
-                condition="visible",
-            )
-            save_html(html_text=self.driver.page_source, file_name=query)
-            clicked = False
+    def run_g2(self, product, comparing_product,browser,location):
+        
+        try:
+            # self.random_words()
 
-            for attempt in range(10):
+            categories = ['word', 'name', 'country', 'movie', 'music','sports', 'technology', 'News']
+
+            test_keywords = [
+                        "browser tests", "software testing", "automation tests",
+                        "ai in test cases", "app android", "android on browser",
+                    ]
+
+            categories_queries = random.choices(categories, k=2)
+
+            test_queries = random.choices(test_keywords, k=2)
+            keywords = categories_queries + test_queries
+
+            gs.search_work(keywords)
+
+            try:
+                G2Page(
+                    self.driver, self.human_simulator, product, comparing_product
+                ).run_g2_saucelabs()
+
                 try:
-                    elem_xpath = self.gs.get_elem_xpaths()
-                    logger.info(f"Attempt {attempt+1}: Elem Xpath found: {elem_xpath}")
-                    try:
-                        element = self.driver.find_element(By.XPATH, elem_xpath)
-                        self.human_simulator.move_to_element_like_human(element)
-                        self.human_simulator.mouse_click_after_hover(
-                            self.driver.find_element(By.XPATH, elem_xpath)
-                        )
-                        clicked = True
-                        break
-                    except (NoSuchElementException, ElementClickInterceptedException) as e:
-                        logger.warning(f"{elem_xpath} not found: {e}")
-                        self.human_simulator.scroll_page(
-                            total_scroll=5, step_delay=0.1, direction="down"
-                        )
-                except Exception as e:
-                    logger.error(f"random_words failed for keyword '{keyword}': {e}")
-                    breakpoint()
+                    G2Comparison(
+                        self.driver, self.human_simulator, comparing_product
+                    ).run_g2_comparisons()
+                except :
+                    status = "Failed at G2 Comparison"
+                    logger.error(status)
 
-            if not clicked:
-                raise RuntimeError(
-                    f"Could not find/click any element after 10 attempts "
-                    f"for query '{query}'"
-                )
+                status = "Done"
 
-    def test_keywords_search(self):
-        test_keywords = [
-            "browser tests", "software testing", "automation tests",
-            "ai in test cases", "app android", "android on browser",
-        ]
+            except:
+                status = "Failed at G2 Page"
+                logger.error(status)
 
-        keywords = random.choices(test_keywords, k=2)
-        for keyword in keywords:
-            self.human_simulator.input_search_query(keyword)
-            locator = (By.XPATH, '//a[@aria-label="Go to Google Home"]')
-            wait_for_element(self.driver, locator, condition="visible")
+        except:
+            status = "Failed at Google Search"
+            logger.error(status)
 
-            clicked = False
-            for i in range(10):
-                elem_xpath = self.gs.get_elem_xpaths()
-                logger.info(f"Elem Xpath found: {elem_xpath}")
-                try:
-                    element = self.driver.find_element(By.XPATH, elem_xpath)
-                    self.human_simulator.move_to_element_like_human(element)
-                    self.human_simulator.mouse_click_after_hover(
-                        self.driver.find_element(By.XPATH, elem_xpath)
-                    )
-                    clicked = True
-                    break
-                except (NoSuchElementException, ElementClickInterceptedException) as e:
-                    logger.warning(f"{elem_xpath} not found: {e}")
-                    self.human_simulator.scroll_page(
-                        total_scroll=5, step_delay=0.1, direction="down"
-                    )
+        self.set_data(product, comparing_product,browser,location,status)
 
-            if not clicked:
-                raise RuntimeError("Could not find/click any element after 10 attempts")
+        self.excel.save_excel(row=self.items)
+        
 
-    def run_g2(self, product, comparing_product):
-        self.random_words()
-        self.test_keywords_search()
-
-        G2Page(
-            self.driver, self.human_simulator, product, comparing_product
-        ).run_g2_saucelabs()
-
-        G2Comparison(
-            self.driver, self.human_simulator, comparing_product
-        ).run_g2_comparisons()
 
 
 if __name__ == "__main__":
@@ -132,32 +97,41 @@ if __name__ == "__main__":
 
     products = {
         "SauceLabs": ["Ranorex", "Testcomplete"],
-        "BrowserStack": ["Testrail", "Perfecto"],
+        # "BrowserStack": ["Testrail", "Perfecto"],
     }
+    try:
 
-    # vpn = ExpressVPN()
-    # locations = vpn.get_vpn_locations()
+        vpn = ExpressVPN()
+        locations = vpn.get_vpn_locations()
 
-    for product, comparing_products in products.items():
-        # vpn.connect(random.choice(locations))
-        manager = Browser(headless=False)
-        driver = manager.launch("chrome")
+        for product, comparing_products in products.items():
 
-        human_simulator = HumanSimulator(driver)
+            location = random.choice(locations)
+            # vpn.connect(location)
+            
+            manager = Browser(headless=False)
+            driver , browser = manager.launch("chrome")
 
-        gs = GoogleSearch(driver)
-        gs.get_google()
+            human_simulator = HumanSimulator(driver)
 
-        for comparing_product in comparing_products:
-            g2_project = G2Automation(driver, human_simulator, gs)
-            try:
-                g2_project.run_g2(product, comparing_product)
-            except Exception as e:
-                logger.error(
-                    f"run_g2 failed for {product}/{comparing_product}: {e}"
-                )
+            gs = GoogleSearch(driver,human_simulator)
+            gs.get_google()
 
-        logger.info(f"Comparison Process Completed for {product}")
+            for comparing_product in comparing_products:
+
+                g2_project = G2Automation(driver, human_simulator, gs)
+
+                try:
+                    g2_project.run_g2(product, comparing_product,browser,location)
+                except Exception as e:
+                    logger.error(f"run_g2 failed for {product}/{comparing_product}: {e}")
+
+            logger.info(f"Comparison Process Completed for {product}")
+
+            # vpn.disconnect()
+
+    except Exception as e:
+        logger.error(traceback.format_exc())
+    finally:
         driver.quit()
-        # vpn.disconnect(random.choice(locations))
-        # time.sleep(5)
+        # vpn.disconnect()

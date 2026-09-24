@@ -45,6 +45,7 @@ def get_random_word_or_sentence_faker(option):
     fake = Faker()
     curr_yr = datetime.now().year
     year = randint(1950, curr_yr)
+    
     if option == 'word':
         return f"{fake.word()} meaning"
     elif option == 'name':
@@ -63,7 +64,8 @@ def get_random_word_or_sentence_faker(option):
     elif option == 'News':
         return f"current news of {fake.city()}"
     else:
-        return "Invalid option. Use 'word' or 'sentence'"
+        return option
+        # return "Invalid option. Use 'word' or 'sentence'"
 
 def save_html(html_text, file_name="Test"):
     folder_path = Path("HTML")

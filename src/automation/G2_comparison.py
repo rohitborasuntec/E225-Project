@@ -25,9 +25,9 @@ class G2Comparison:
     # OPEN G2 COMPARE PAGE
     # ==================================================================
     def open_g2_compare_page(self):
-        logger.info("Opening Sauce Labs reviews page...")
+        # logger.info("Opening Sauce Labs reviews page...")
         save_html(self.driver.page_source, "G2_Comparison_Page")
-
+        
         # Cookie banner
         try:
             cookie_banner = self.driver.find_elements(
@@ -72,7 +72,7 @@ class G2Comparison:
             self.human_simulator.scroll_page()
             time.sleep(random.uniform(0.5, 1))
         else:
-            raise Exception("Comparison block was not found.")
+            logger.error("Comparison block was not found.")
 
         compare_element = wait_for_element(
             self.driver, (By.XPATH, compare_xpath),
@@ -141,7 +141,7 @@ class G2Comparison:
         time.sleep(random.uniform(3, 5))
         logger.info("New page opened.")
 
-        self.browse_comparison_page(duration=60)
+        self.browse_comparison_page(duration=5)
         logger.info("Second page browsing completed.")
         logger.info("Complete Sauce Labs flow finished.")
 

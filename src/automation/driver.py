@@ -29,7 +29,7 @@ Requirements:
 
 import os,subprocess
 import platform
-import time
+import time,random
 
 import undetected_chromedriver as uc
 from selenium import webdriver
@@ -37,8 +37,8 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.firefox.service import Service as FirefoxService
-from webdriver_manager.firefox import GeckoDriverManager
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
+# from webdriver_manager.firefox import GeckoDriverManager
+# from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 
 class Browser:
@@ -62,23 +62,30 @@ class Browser:
     # ---------------------------------------------------------------- #
     # Public entrypoint
     # ---------------------------------------------------------------- #
-    def launch(self, browser_name: str):
+    def launch(self, browser_name=None):
         """Launch the requested browser and return the live driver instance."""
-        print("LOOOOL")
-        key = browser_name.strip().lower()
+        
         mapping = {
             "firefox": self.get_firefox,
             "chrome": self.get_chrome,
             "brave": self.get_brave,
-            "opera mini": self.get_opera,
             "opera": self.get_opera,
             "edge": self.get_edge,
-            "duckduckgo": self.get_duckduckgo,
         }
+        
+        if not browser_name:
+            browser = random.choice(list(mapping.keys()))
+        else:
+            browser = browser_name
+
+        key = browser.strip().lower()
+
         if key not in mapping:
             raise ValueError(f"Unsupported browser '{browser_name}'. Choose from {self.SUPPORTED}")
+        
         self.driver = mapping[key]()
-        return self.driver
+
+        return self.driver,browser 
 
     # ---------------------------------------------------------------- #
     # Chrome  (undetected-chromedriver)
@@ -288,7 +295,7 @@ if __name__ == "__main__":
     browsers = ["Firefox", "Chrome", "Brave", "Opera Mini", "Edge"]
 
     manager = Browser(headless=False)
-    driver = manager.launch("DuckDuckGo")
+    driver,browser = manager.launch("DuckDuckGo")
     driver.get("https://example.com")
     print(driver.title)
     manager.quit()
