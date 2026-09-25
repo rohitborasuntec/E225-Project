@@ -174,6 +174,82 @@ G2_PRODUCT_POOL = {
 
 
 # ======================================================================
+# G2 BROWSERSTACK PAGE (managed by G2_page.py)
+# ======================================================================
+# Keep the page-specific locators here so changes to G2's markup can be
+# maintained without searching through the interaction code.
+G2_BROWSERSTACK_XPATHS = {
+    "product_details": '//*[@id="details"]/div/div[2]/div/div[1]/div[1]/div',
+    "product_details_show_more": (
+        '//*[@id="details"]/div/div[2]/div/div[1]/div[1]/div/'
+        'div[2]/div/div/button/div/span/span'
+    ),
+    "integrations_section": '//*[@id="details"]/div/div[2]/div/div[2]/div',
+    "media_section": '//*[@id="details"]/div/div[2]/div/div[3]',
+    "official_downloads_section": (
+        '//*[@id="details"]/div/div[2]/div/div[3]/div[2]/div'
+    ),
+    "official_downloads_show_more": (
+        '//*[@id="details"]/div/div[2]/div/div[3]/div[2]/div/'
+        'div[2]/div[2]/div'
+    ),
+    "show_more_descendant": (
+        './/button[contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
+        '"abcdefghijklmnopqrstuvwxyz"), "show more")]'
+        ' | .//a[contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
+        '"abcdefghijklmnopqrstuvwxyz"), "show more")]'
+    ),
+    "reviews_heading": '//*[@id="reviews-and-filters"]/div/div[1]/div[1]',
+    "reviews_text": (
+        '//*[@id="reviews-and-filters"]/div/div[1]/div[1]/div[2]/div/div[2]'
+    ),
+    "target_review": '//*[@id="browserstack-review-10504282"]',
+    "reviews_scroll_area": '//*[@id="reviews-and-filters"]/div/div[3]/div',
+    "review_read_more": (
+        './/*[self::button or self::a or @role="button"]'
+        '[contains(translate(normalize-space(.), '
+        '"ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), '
+        '"read more")]'
+    ),
+    "reviews_pagination": (
+        '//*[@id="reviews-and-filters"]/div/div[3]/div/div/ul'
+    ),
+    "top_rated_alternatives": (
+        '//*[@id="additional_information"]/div/div[3]/div[1]/div[1]'
+    ),
+    "ancestor_button": "./ancestor::button[1]",
+    "ancestor_link": "./ancestor::a[1]",
+}
+
+
+# ======================================================================
+# SHARED G2 / SAUCE LABS PAGE LOCATORS (used by G2_page.py)
+# ======================================================================
+G2_PAGE_XPATHS = {
+    "top_rated_section": (
+        '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[2]'
+    ),
+    "alternative_link": (
+        '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[3]/div[2]/a/div/span'
+    ),
+    "breadcrumb": '//*[@id="breadcrumbs"]/li[5]/a/span',
+    "login_modal_close": '//*[@id="login-modal"]/div[2]/div/div[2]/button',
+    "google_result_ancestor_link": "./ancestor::a[1]",
+    "show_more_buttons": (
+        '//button[.//*[@data-elv--accordion--show-more-controller-target="triggerText" '
+        'and normalize-space()="Show More"]]'
+    ),
+    "show_more_controller": (
+        './ancestor::*[contains(@data-controller, '
+        '"elv--accordion--show-more-controller")][1]'
+    ),
+    "top_rated_heading": (
+        '//*[@id="details"]//*[normalize-space(.)="Top-Rated Alternatives"]'
+    ),
+}
+
+
+# ======================================================================
 # GOOGLE SEARCH RESULTS (used by G2Automation.random_words / test_keywords_search)
 # ======================================================================
 GOOGLE_RESULTS_POOL = {

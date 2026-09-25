@@ -65,7 +65,7 @@ class G2Automation:
             try:
                 G2Page(
                     self.driver, self.human_simulator, product, comparing_product
-                ).run_g2_saucelabs()
+                ).run_g2_product()
 
                 try:
                     G2Comparison(
