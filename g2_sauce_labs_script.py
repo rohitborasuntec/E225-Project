@@ -283,6 +283,7 @@ def run():
         time.sleep(10)
         logger.info("G2 Sauce Labs automation completed successfully")
     except Exception as error:
+        
         logger.exception(f"G2 Sauce Labs automation failed: {error}")
         raise
     finally:

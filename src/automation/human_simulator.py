@@ -6,6 +6,12 @@ import numpy as np
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    ElementNotInteractableException,
+    StaleElementReferenceException,
+)
 from src.logging import logger
 
 
@@ -335,6 +341,59 @@ class HumanSimulator:
                 self.current_x, self.current_y = corrected_x, corrected_y
 
     # ==================================================================
+    # SAFE ELEMENT CLICK (native → scroll+retry → JS fallback)
+    # ==================================================================
+    def _safe_element_click(self, element):
+        """
+        Try native .click() first; if the browser reports that the element
+        is out of the viewport (ElementClickInterceptedException), scroll
+        it back into view and retry, then fall back to a JS click.
+        Returns True on success.
+        """
+        # Step 1 — make sure the element is inside the visible viewport.
+        # Fixes the negative-Y case (Edge infobar / address bar pushing
+        # elements above y=0).
+        try:
+            self._scroll_element_into_view(element)
+        except Exception:
+            pass
+
+        # Step 2 — native click (goes through real pointer events).
+        try:
+            element.click()
+            return True
+        except (ElementClickInterceptedException,
+                ElementNotInteractableException) as exc:
+            logger.debug(
+                f"Native click failed ({type(exc).__name__}); "
+                f"retrying after scroll + JS fallback"
+            )
+        except StaleElementReferenceException:
+            # Element replaced mid-click — caller must re-locate it.
+            raise
+
+        # Step 3 — nudge the scroll a bit and try native again.
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                element,
+            )
+            time.sleep(0.15)
+            element.click()
+            return True
+        except Exception:
+            pass
+
+        # Step 4 — last resort: JS click (bypasses the OS pointer entirely).
+        try:
+            self.driver.execute_script("arguments[0].click();", element)
+            logger.debug("Used JS click fallback")
+            return True
+        except Exception as exc:
+            logger.warning(f"JS click also failed: {exc}")
+            return False
+
+    # ==================================================================
     # PUBLIC METHODS
     # ==================================================================
     def simulate_human_behavior(self, num_actions=None):
@@ -430,7 +489,7 @@ class HumanSimulator:
                 time.sleep(self._gauss(0.12, 0.03, 0.06, 0.2))
                 self.mouse_click_after_hover(suggestion)
                 logger.info(f"Clicked")
-                
+
                 # Google sometimes fills without submitting
                 submitted = False
                 deadline = time.monotonic() + 3
@@ -453,7 +512,33 @@ class HumanSimulator:
                 return ""
 
         search_box = self.driver.find_element(By.NAME, "q")
+
+        # FIX: Google's textarea can be re-rendered on Edge; scroll it
+        # fully into view and confirm focus before typing.
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'center'});",
+                search_box,
+            )
+            time.sleep(0.2)
+        except Exception:
+            pass
+
         self.mouse_click(search_box)
+
+        # Wait until the browser reports the search box is focused. Google
+        # sometimes paints the box before it accepts focus.
+        try:
+            WebDriverWait(self.driver, 3, poll_frequency=0.1).until(
+                lambda d: d.switch_to.active_element == search_box
+            )
+        except Exception:
+            # Focus didn't land via the mouse — nudge it with a keyboard click.
+            try:
+                search_box.send_keys(Keys.NULL)
+            except Exception:
+                pass
+
         search_box.clear()
         logger.info(f"Query Used {input_query}")
 
@@ -517,7 +602,7 @@ class HumanSimulator:
         return input_query
 
     def mouse_click(self, element, click_delay=None):
-        """Move the cursor onto element, then click."""
+        """Move the cursor onto element, then click (with fallbacks)."""
         self.move_to_element_like_human(element)
         delay = (
             click_delay
@@ -531,9 +616,12 @@ class HumanSimulator:
                 self.pyautogui.click()
                 return
             except Exception as e:
-                logger.debug(f"pyautogui.click failed: {e}; falling back to element.click()")
+                logger.debug(
+                    f"pyautogui.click failed: {e}; falling back to element.click()"
+                )
 
-        element.click()
+        # FIX: route through the safe click helper instead of element.click().
+        self._safe_element_click(element)
 
     def mouse_hover(self, element, hover_time=None):
         self.move_to_element_like_human(element)
@@ -617,7 +705,7 @@ class HumanSimulator:
 
     def mouse_click_after_hover(self, element):
         """Click an element that was already hovered. Uses native click
-        when available."""
+        when available, with the same fallback chain as mouse_click."""
         time.sleep(self._gauss(0.4, 0.12, 0.2, 0.7))
         if self.use_native_cursor:
             try:
@@ -627,7 +715,8 @@ class HumanSimulator:
                 logger.debug(
                     f"pyautogui.click failed: {e}; falling back to element.click()"
                 )
-        element.click()
+        # FIX: same protection as mouse_click.
+        self._safe_element_click(element)
 
     def move_mouse_around(self, moves=3):
         """

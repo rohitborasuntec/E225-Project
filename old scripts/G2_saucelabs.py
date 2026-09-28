@@ -364,6 +364,7 @@ class G2Page:
             
             result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
+                breakpoint()
                 raise RuntimeError(
                     f"Could not find the exact Google result: {self.target_text}"
                 )
@@ -409,10 +410,10 @@ class G2Page:
         except Exception as error:
             logger.exception(f"G2 Sauce Labs automation failed: {error}")
             raise
-        finally:
-            if self.driver:
-                self.driver.quit()
-                logger.info("Browser closed")
+        # finally:
+        #     if self.driver:
+        #         self.driver.quit()
+        #         logger.info("Browser closed")
 
 # ---------------------------------------------------------------------- #
 # module-level entry point (matches old script's `run()`)

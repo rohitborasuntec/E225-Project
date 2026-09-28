@@ -1,17 +1,20 @@
 import os
 import pandas as pd
-from src.logging import logger
 from datetime import datetime
+from src.logging import logger
 
 
 class Excel:
     output_path = "Output"
+    COLUMNS = [
+        "Date", "Time", "Link", "First product", "Second product",
+        "Browser Name", "Country Name", "Version Number", "Status",
+    ]
 
     def __init__(self):
-
-        self.date = datetime.now().strftime("%d %B %Y")
-        
-        hour = datetime.now().hour
+        now = datetime.now()
+        self.date = now.strftime("%d %B %Y")
+        hour = now.hour
         if 5 <= hour < 12:
             self.period = "Morning"
         elif 12 <= hour < 17:
@@ -20,47 +23,58 @@ class Excel:
             self.period = "Evening"
         else:
             self.period = "Night"
-        
-        os.makedirs(self.output_path, exist_ok=True)
-        
-        self.data = pd.DataFrame()
-        
-        if not os.path.exists(os.path.join(self.output_path, "g2.xlsx")):
-            self.create_excel_g2()
 
-    def create_excel_g2(self):
-        columns = [
-            "Date", "Time", "Link", "First product", "Second product",
-            "Browser Name", "Country Name", "Version Number", "Status"
-        ]
-        self.data = pd.DataFrame(columns=columns)
-        excel_name = os.path.join(self.output_path, "g2.xlsx")
-        self.data.to_excel(excel_name, index=False)
-        logger.info(f"{excel_name} has been created")
+        os.makedirs(self.output_path, exist_ok=True)
+        self.file_name = os.path.join(self.output_path, "g2.xlsx")
+
+        if not os.path.exists(self.file_name):
+            self._create()
+
+    def _create(self):
+        pd.DataFrame(columns=self.COLUMNS).to_excel(self.file_name, index=False)
+        logger.info(f"{self.file_name} has been created")
+
+    def check_if_present(self, product, comparing_product):
+        if not os.path.exists(self.file_name):
+            return False
+
+        existing = pd.read_excel(self.file_name)
+
+        match = (
+            (existing["Date"].astype(str).str.strip() == str(self.date).strip())
+            & (existing["Time"].astype(str).str.strip() == str(self.period).strip())
+            & (existing["First product"].astype(str).str.strip() == str(product).strip())
+            & (existing["Second product"].astype(str).str.strip() == str(comparing_product).strip()
+            & (existing["Status"].astype(str).str.strip() == "Done")
+        ))
+
+        return match.any()
 
     def save_excel(self, row=None, df=None):
-        file_name = os.path.join(self.output_path, "g2.xlsx")
-
         if row is not None:
-            row["Date"] = self.date 
+            row = dict(row)
+            row["Date"] = self.date
             row["Time"] = self.period
-            columns = [
-                        "Date", "Time", "Link", "First product", "Second product",
-                        "Browser Name", "Country Name", "Version Number", "Status"
-                    ]
-            row = row[columns]
-            
-            if os.path.exists(file_name):
-                existing = pd.read_excel(file_name)
-                existing.loc[len(existing)] = row
-                existing.to_excel(file_name, index=False)
-            else:
-                self.data.loc[len(self.data)] = row
-                self.data.to_excel(file_name, index=False)
+            row = {col: row.get(col, "") for col in self.COLUMNS}
 
+            if os.path.exists(self.file_name):
+                existing = pd.read_excel(self.file_name)
+                # FIX: align columns (pd.concat with a dict can misalign if the
+                # existing file has extra/missing columns).
+                existing = existing.reindex(columns=self.COLUMNS)
+                combined = pd.concat(
+                    [existing, pd.DataFrame([row], columns=self.COLUMNS)],
+                    ignore_index=True,
+                )
+                combined.to_excel(self.file_name, index=False)
+            else:
+                pd.DataFrame([row], columns=self.COLUMNS).to_excel(
+                    self.file_name, index=False,
+                )
         elif df is not None:
-            df.to_excel(file_name, index=False, header=True)
-        logger.info(f"{file_name} has been saved")
+            df.to_excel(self.file_name, index=False, header=True)
+
+        logger.info(f"{self.file_name} has been saved")
 
 
 if __name__ == "__main__":

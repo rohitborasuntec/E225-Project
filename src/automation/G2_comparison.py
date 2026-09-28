@@ -8,7 +8,7 @@ if __package__ in (None, ""):
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
-from src.commons import wait_for_element, save_html
+from src.commons import *
 from src.automation.human_simulator import HumanSimulator
 from src.automation.xpath_pools import G2_COMPARISON_POOL
 from src.logging import logger
@@ -59,6 +59,7 @@ class G2Comparison:
             f"//*[contains(text(),'{self.comparing_product}')]"
             f"/../../..//*[contains(text(),'Compare Now')]//ancestor::a"
         )
+        # //button[contains(.,'Reject Non-Essential')]x
         logger.info("Searching for comparison block...")
         start_time = time.time()
         while time.time() - start_time < 30:
@@ -78,7 +79,6 @@ class G2Comparison:
             self.driver, (By.XPATH, compare_xpath),
             condition="clickable", timeout=10, poll=0.5,
         )
-
         logger.info("Clicking comparison button (human)...")
         try:
             self.human_simulator.mouse_click(compare_element)
@@ -108,7 +108,14 @@ class G2Comparison:
 
         self.open_g2_compare_page()
         logger.info("Comparison page opened.")
-
+        for i in range(5):
+            if check_for_block(self.driver):
+                self.driver.refresh()
+            else:
+                break
+        else:
+            logger.error("Access Denied")
+            raise Exception("Access Denied")
         self.browse_comparison_page(duration=60)
         logger.info("Comparison page browsing completed.")
 
