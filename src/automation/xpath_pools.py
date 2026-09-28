@@ -235,6 +235,12 @@ G2_PAGE_XPATHS = {
     "breadcrumb": '//*[@id="breadcrumbs"]/li[5]/a/span',
     "login_modal_close": '//*[@id="login-modal"]/div[2]/div/div[2]/button',
     "google_result_ancestor_link": "./ancestor::a[1]",
+    "saucelabs_show_more_buttons": (
+        '//*[@id="details"]/div/div[2]/div/div[1]/div[1]/div[1]/div[2]/div/div/button',
+        '//*[@id="sauce-labs-review-13337828"]/div[2]/div[2]/div[3]/button',
+        '//*[@id="sauce-labs-review-13469663"]/div[2]/div[2]/div[3]/button',
+        '//*[@id="sauce-labs-review-13435193"]/div[2]/div[2]/div[3]/button',
+    ),
     "show_more_buttons": (
         '//button[.//*[@data-elv--accordion--show-more-controller-target="triggerText" '
         'and normalize-space()="Show More"]]'

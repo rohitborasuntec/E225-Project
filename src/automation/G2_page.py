@@ -586,14 +586,27 @@ class G2Page:
         self.close_login_modal_if_present(timeout=0.4)
 
         def show_more_buttons():
-            buttons = self.driver.find_elements(
-                By.XPATH,
-                G2_PAGE_XPATHS["show_more_buttons"],
-            )
-            return [b for b in buttons if b.is_displayed() and b.is_enabled()]
+            buttons = []
+            seen = set()
+            for xpath in G2_PAGE_XPATHS["saucelabs_show_more_buttons"]:
+                for candidate in self.driver.find_elements(By.XPATH, xpath):
+                    if candidate.id in seen:
+                        continue
+                    seen.add(candidate.id)
+                    if candidate.is_displayed() and candidate.is_enabled():
+                        buttons.append(candidate)
+            return buttons
 
         choices = WebDriverWait(self.driver, 30).until(lambda _: show_more_buttons())
         button = random.choice(choices)
+        try:
+            section_id = button.find_element(By.XPATH, "./ancestor::*[@id][1]").get_attribute("id")
+        except Exception:
+            section_id = "details"
+        logger.info(
+            f"Randomly selected 1 of {len(choices)} Sauce Labs Show More buttons "
+            f"from {section_id}"
+        )
 
         controller = button.find_element(
             By.XPATH,
@@ -634,10 +647,11 @@ class G2Page:
                 return False
             return False
 
-        self.human_simulator.mouse_hover(button)
+        self.human_simulator.native_wheel_to_element(button)
+        self.human_simulator.native_hover(button, random.uniform(0.4, 1.0))
         self.close_login_modal_if_present(timeout=0.4)
         try:
-            self.human_simulator.mouse_click_after_hover(button)
+            self.human_simulator.native_click(button)
         except ElementClickInterceptedException:
             self.close_login_modal_if_present(timeout=2)
 
@@ -647,24 +661,18 @@ class G2Page:
             )
         except TimeoutException:
             self.close_login_modal_if_present(timeout=2)
-            button.click()
+            self.human_simulator.native_wheel_to_element(button)
+            self.human_simulator.native_click(button)
             try:
                 WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
                     lambda _: accordion_is_open()
                 )
             except TimeoutException:
-                self.close_login_modal_if_present(timeout=1)
-                self.driver.execute_script("arguments[0].click();", button)
-                try:
-                    WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
-                        lambda _: accordion_is_open()
-                    )
-                except TimeoutException:
-                    logger.warning(
-                        "Show More clicked, but G2 did not expose expansion "
-                        "state; continuing"
-                    )
-                    return
+                logger.warning(
+                    "Show More clicked with mouse, but G2 did not expose "
+                    "expansion state; continuing"
+                )
+                return
 
         logger.info("Clicked one randomly selected Show More button")
 
