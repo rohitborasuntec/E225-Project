@@ -23,7 +23,9 @@ class CsvFormatter(logging.Formatter):
         csv.writer(row).writerow([
             datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S"),
             record.levelname,
-            record.name,
+            record.filename,
+            record.funcName,
+            record.lineno,
             message,
         ])
         return row.getvalue().rstrip("\r\n")
@@ -63,9 +65,16 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     if logger.handlers:
         logger.handlers.clear()
     
-    formatter = logging.Formatter(
-        fmt="%(asctime)s | %(message)s",
-        datefmt="%H:%M:%S"
+    file_formatter = logging.Formatter(
+        fmt=(
+            "%(asctime)s | %(levelname)s | %(filename)s:%(lineno)d | "
+            "%(funcName)s | %(message)s"
+        ),
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    console_formatter = logging.Formatter(
+        fmt="%(asctime)s | %(levelname)s | %(message)s",
+        datefmt="%H:%M:%S",
     )
     
     file_handler = RotatingFileHandler(
@@ -76,13 +85,15 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     )
     
     file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
+    file_handler.setFormatter(file_formatter)
     logger.addHandler(file_handler)
 
     csv_is_empty = not csv_file.exists() or csv_file.stat().st_size == 0
     if csv_is_empty:
         with csv_file.open("w", newline="", encoding="utf-8") as stream:
-            csv.writer(stream).writerow(["Timestamp", "Level", "Logger", "Message"])
+            csv.writer(stream).writerow(
+                ["Timestamp", "Level", "Source File", "Function", "Line", "Message"]
+            )
 
     csv_handler = RotatingFileHandler(
         csv_file,
@@ -97,37 +108,35 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
     
     _logger = logger
     
-    logger.info("=" * 70)
+    logger.info("Logging session started")
     logger.info(f"Logger initialized: {log_file}")
     logger.info(f"CSV logger initialized: {csv_file}")
-    logger.info("=" * 70)
     
     return logger
 
 # Convenience functions
-def debug(message):
-    get_logger().debug(message)
+def debug(message, *args, **kwargs):
+    get_logger().debug(message, *args, stacklevel=2, **kwargs)
 
-def info(message):
-    message = f"{'-'*10} {message} {'-'*10}" 
-    get_logger().info(message)
+def info(message, *args, **kwargs):
+    get_logger().info(message, *args, stacklevel=2, **kwargs)
 
-def warning(message):
-    get_logger().warning(message)
+def warning(message, *args, **kwargs):
+    get_logger().warning(message, *args, stacklevel=2, **kwargs)
 
-def error(message):
-    get_logger().error(message)
+def error(message, *args, **kwargs):
+    get_logger().error(message, *args, stacklevel=2, **kwargs)
 
-def critical(message):
-    get_logger().critical(message)
+def critical(message, *args, **kwargs):
+    get_logger().critical(message, *args, stacklevel=2, **kwargs)
 
-def exception(message):
-    get_logger().exception(message)
+def exception(message, *args, **kwargs):
+    get_logger().exception(message, *args, stacklevel=2, **kwargs)
 
 # Example usage
 if __name__ == "__main__":

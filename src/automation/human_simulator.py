@@ -429,7 +429,7 @@ class HumanSimulator:
                 )
                 time.sleep(self._gauss(0.12, 0.03, 0.06, 0.2))
                 self.mouse_click_after_hover(suggestion)
-                logger.info(f"Clicked")
+                logger.info("Clicked a Google search suggestion with the mouse")
                 
                 # Google sometimes fills without submitting
                 submitted = False
