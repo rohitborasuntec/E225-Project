@@ -25,174 +25,6 @@ from src.automation.xpath_pools import (
 from src.logging import logger
 
 
-def native_mouse(driver):
-    human = getattr(driver, "_browserstack_human", None)
-    if human is None or not human.use_native_cursor or human.pyautogui is None:
-        raise RuntimeError("BrowserStack requires a working native mouse cursor")
-    return human.pyautogui
-
-
-def screen_point(driver, viewport_x, viewport_y, allow_path_overshoot=False):
-    metrics = driver.execute_script(
-        "return {x:screenX, y:screenY, chrome:outerHeight-innerHeight};"
-    )
-    point = (
-        round(metrics["x"] + viewport_x),
-        round(metrics["y"] + metrics["chrome"] + viewport_y),
-    )
-    desktop = native_mouse(driver).size()
-    if allow_path_overshoot:
-        # HumanSimulator's Bezier path can briefly curve just past an edge.
-        # Keep those movement-only points away from PyAutoGUI's corner fail-safe.
-        if not (-80 <= point[0] < desktop.width + 80
-                and -80 <= point[1] < desktop.height + 80):
-            raise RuntimeError(
-                f"Native mouse path point {point} is too far outside desktop {desktop}"
-            )
-        return (
-            min(max(point[0], 2), desktop.width - 3),
-            min(max(point[1], 2), desktop.height - 3),
-        )
-    if not (0 <= point[0] < desktop.width and 0 <= point[1] < desktop.height):
-        raise RuntimeError(
-            f"Native mouse target {point} is outside the visible desktop {desktop}"
-        )
-    return point
-
-
-def scroll_with_mouse(driver, pixels, area=None):
-    mouse = native_mouse(driver)
-    if area is None:
-        viewport = driver.execute_script("return [innerWidth, innerHeight];")
-        viewport_x, viewport_y = viewport[0] / 2, viewport[1] / 2
-    else:
-        point = driver.execute_script(
-            "const r=arguments[0].getBoundingClientRect();"
-            "const left=Math.max(0,r.left), right=Math.min(innerWidth,r.right);"
-            "const top=Math.max(0,r.top), bottom=Math.min(innerHeight,r.bottom);"
-            "return right>left && bottom>top ? {x:(left+right)/2,y:(top+bottom)/2} : null;",
-            area,
-        )
-        if point is None:
-            raise RuntimeError("Reviews scroll area is outside the visible viewport")
-        viewport_x, viewport_y = point["x"], point["y"]
-    x, y = screen_point(driver, viewport_x, viewport_y)
-    mouse.moveTo(x, y, duration=random.uniform(0.15, 0.3))
-    before_y = driver.execute_script("return window.scrollY;")
-    notches = max(2, min(6, round(abs(pixels) / 70)))
-    wheel_tick = -1 if pixels > 0 else 1
-    for _ in range(notches):
-        mouse.scroll(wheel_tick)
-        time.sleep(random.uniform(0.06, 0.14))
-    time.sleep(0.2)
-
-    after_y = driver.execute_script("return window.scrollY;")
-    if after_y == before_y:
-        viewport = driver.execute_script("return [innerWidth, innerHeight];")
-        retry_x, retry_y = screen_point(
-            driver, viewport[0] * 0.6, viewport[1] * 0.55
-        )
-        mouse.moveTo(retry_x, retry_y, duration=random.uniform(0.15, 0.3))
-        for _ in range(notches + 1):
-            mouse.scroll(wheel_tick)
-            time.sleep(random.uniform(0.07, 0.15))
-        time.sleep(0.2)
-
-
-def wheel_to_element(driver, element):
-    """Reach an element using the visible OS mouse wheel."""
-    for _ in range(35):
-        position = driver.execute_script(
-            "const r=arguments[0].getBoundingClientRect();"
-            "return {middle:r.top+r.height/2, viewport:innerHeight};",
-            element,
-        )
-        distance = position["middle"] - position["viewport"] * 0.5
-        if abs(distance) < position["viewport"] * 0.3:
-            return
-        step = min(280, max(70, int(abs(distance))))
-        scroll_with_mouse(driver, step if distance > 0 else -step)
-        time.sleep(random.uniform(0.15, 0.35))
-    raise RuntimeError("Could not reach page section with mouse-wheel scrolling")
-
-
-def hover_with_mouse(driver, element, seconds=0.8):
-    rect = driver.execute_script(
-        "const r=arguments[0].getBoundingClientRect();"
-        "return {x:r.x+r.width/2, y:r.y+r.height/2,"
-        "width:innerWidth, height:innerHeight};", element
-    )
-    if not (0 < rect["x"] < rect["width"] and 0 < rect["y"] < rect["height"]):
-        raise RuntimeError("Mouse target is outside the visible browser viewport")
-    x, y = screen_point(driver, rect["x"], rect["y"])
-    native_mouse(driver).moveTo(x, y, duration=random.uniform(0.25, 0.65))
-    time.sleep(seconds)
-
-
-def click_with_mouse(driver, element):
-    hover_with_mouse(driver, element, random.uniform(0.2, 0.5))
-    native_mouse(driver).click()
-
-
-class BrowserStackHumanSimulator(HumanSimulator):
-    """Use native cursor coordinates and wheel scrolling in shared helpers."""
-
-    def _apply_screen_offset(self, browser_x, browser_y):
-        return screen_point(self.driver, browser_x, browser_y, allow_path_overshoot=True)
-
-    def _scroll_element_into_view(self, element, **_kwargs):
-        wheel_to_element(self.driver, element)
-
-
-def select_visible_phrase_with_mouse(driver, root, min_words=1, max_words=10):
-    """Drag across one visible phrase without changing DOM selection via JS."""
-    word_count = random.randint(min_words, max_words)
-    points = driver.execute_script(
-        "const root = arguments[0], count = arguments[1];"
-        "const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);"
-        "const candidates = []; let node;"
-        "while ((node = walker.nextNode())) {"
-        "  const parent = node.parentElement;"
-        "  if (!parent || !parent.getClientRects().length) continue;"
-        "  const words = [...node.data.matchAll(/[A-Za-z]+/g)];"
-        "  if (words.length < count) continue;"
-        "  for (let i = 0; i <= words.length - count; i++) {"
-        "    const first=words[i], last=words[i+count-1];"
-        "    const a=document.createRange(), b=document.createRange();"
-        "    a.setStart(node, first.index); a.setEnd(node, first.index+1);"
-        "    b.setStart(node, last.index+last[0].length-1);"
-        "    b.setEnd(node, last.index+last[0].length);"
-        "    const ar=a.getBoundingClientRect(), br=b.getBoundingClientRect();"
-        "    if (ar.top>=80 && br.bottom<innerHeight-20 && ar.left>=0"
-        "        && br.right<innerWidth) candidates.push({"
-        "      startX:ar.left+1, startY:ar.top+ar.height/2,"
-        "      endX:br.right-1, endY:br.top+br.height/2});"
-        "  }"
-        "}"
-        "return candidates.length ? candidates[Math.floor(Math.random()*candidates.length)] : null;",
-        root,
-        word_count,
-    )
-    if not points:
-        raise RuntimeError("No visible phrase available for mouse selection")
-
-    mouse = native_mouse(driver)
-    start_x, start_y = screen_point(driver, points["startX"], points["startY"])
-    end_x, end_y = screen_point(driver, points["endX"], points["endY"])
-    mouse.moveTo(start_x, start_y, duration=random.uniform(0.2, 0.4))
-    mouse.mouseDown()
-    try:
-        time.sleep(random.uniform(0.15, 0.35))
-        mouse.moveTo(end_x, end_y, duration=random.uniform(0.35, 0.7))
-    finally:
-        mouse.mouseUp()
-    selected = driver.execute_script("return window.getSelection().toString();") or ""
-    if not min_words <= len(re.findall(r"[A-Za-z]+", selected)) <= max_words:
-        raise RuntimeError("Mouse drag did not select the requested phrase length")
-    time.sleep(random.uniform(1.2, 2.5))
-    return selected
-
-
 class BrowserStackReviewsProductDetails:
     """Interactions for the BrowserStack Reviews & Product Details card."""
 
@@ -205,7 +37,7 @@ class BrowserStackReviewsProductDetails:
 
     def select_details_phrase(self, details):
         """Drag the mouse across one visible 1–10-word phrase."""
-        return select_visible_phrase_with_mouse(self.driver, details)
+        return self.human_simulator.select_visible_phrase(details)
 
     def explore(self):
         try:
@@ -217,8 +49,8 @@ class BrowserStackReviewsProductDetails:
                 "BrowserStack details did not load; G2 may be showing a verification page"
             ) from error
 
-        wheel_to_element(self.driver, details)
-        hover_with_mouse(self.driver, details, 1.0)
+        self.human_simulator.native_wheel_to_element(details)
+        self.human_simulator.native_hover(details, 1.0)
         phrase = self.select_details_phrase(details)
         logger.info(f"Selected BrowserStack phrase: {phrase!r}")
 
@@ -242,17 +74,17 @@ class BrowserStackReviewsProductDetails:
             except Exception:
                 return False
 
-        wheel_to_element(self.driver, button)
-        hover_with_mouse(self.driver, button, 0.8)
-        click_with_mouse(self.driver, button)
+        self.human_simulator.native_wheel_to_element(button)
+        self.human_simulator.native_hover(button, 0.8)
+        self.human_simulator.native_click(button)
         try:
             WebDriverWait(self.driver, 3, poll_frequency=0.2).until(is_expanded)
         except TimeoutException:
             button = self.driver.find_element(By.XPATH, self.show_more_xpath).find_element(
                 By.XPATH, G2_BROWSERSTACK_XPATHS["ancestor_button"]
             )
-            hover_with_mouse(self.driver, button, 0.5)
-            click_with_mouse(self.driver, button)
+            self.human_simulator.native_hover(button, 0.5)
+            self.human_simulator.native_click(button)
             try:
                 WebDriverWait(self.driver, 3, poll_frequency=0.2).until(is_expanded)
             except TimeoutException as error:
@@ -274,9 +106,9 @@ class BrowserStackIntegrations:
         section = WebDriverWait(self.driver, 15).until(
             EC.presence_of_element_located((By.XPATH, self.section_xpath))
         )
-        wheel_to_element(self.driver, section)
+        self.human_simulator.native_wheel_to_element(section)
         WebDriverWait(self.driver, 5).until(lambda _: section.is_displayed())
-        hover_with_mouse(self.driver, section, 1.0)
+        self.human_simulator.native_hover(section, 1.0)
         logger.info("Scrolled to BrowserStack Integrations")
         time.sleep(random.uniform(2, 4))
 
@@ -294,8 +126,8 @@ class BrowserStackMedia:
         section = WebDriverWait(self.driver, 15).until(
             EC.presence_of_element_located((By.XPATH, self.section_xpath))
         )
-        wheel_to_element(self.driver, section)
-        hover_with_mouse(self.driver, section, 1.0)
+        self.human_simulator.native_wheel_to_element(section)
+        self.human_simulator.native_hover(section, 1.0)
         carousel = section.find_element(
             By.CSS_SELECTOR, '[data-media-carousel-target="mainCarousel"]'
         )
@@ -313,9 +145,9 @@ class BrowserStackMedia:
             control = controls[0]
             active = carousel.find_element(By.CSS_SELECTOR, ".swiper-slide-active")
             previous_id = active.get_attribute("data-media-id")
-            wheel_to_element(self.driver, control)
-            hover_with_mouse(self.driver, control, random.uniform(0.3, 0.7))
-            click_with_mouse(self.driver, control)
+            self.human_simulator.native_wheel_to_element(control)
+            self.human_simulator.native_hover(control, random.uniform(0.3, 0.7))
+            self.human_simulator.native_click(control)
             WebDriverWait(self.driver, 4, poll_frequency=0.2).until(
                 lambda _: carousel.find_element(
                     By.CSS_SELECTOR, ".swiper-slide-active"
@@ -338,11 +170,11 @@ class BrowserStackMedia:
 
         images = WebDriverWait(self.driver, 10, poll_frequency=0.3).until(visible_images)
         image = random.choice(images)
-        wheel_to_element(self.driver, image)
-        hover_with_mouse(self.driver, image, 0.8)
+        self.human_simulator.native_wheel_to_element(image)
+        self.human_simulator.native_hover(image, 0.8)
         # Video thumbnails have an SVG play icon over the <img>. A pointer click
         # at the tile's center reaches that visible overlay without interception.
-        click_with_mouse(self.driver, image)
+        self.human_simulator.native_click(image)
         logger.info("Clicked one random BrowserStack Media tile")
         view_seconds = random.uniform(5, 12)
         time.sleep(view_seconds)
@@ -353,8 +185,8 @@ class BrowserStackMedia:
         )
         for close_button in close_buttons:
             if close_button.is_displayed():
-                hover_with_mouse(self.driver, close_button, 0.4)
-                click_with_mouse(self.driver, close_button)
+                self.human_simulator.native_hover(close_button, 0.4)
+                self.human_simulator.native_click(close_button)
                 logger.info("Closed BrowserStack Media viewer with mouse")
                 break
 
@@ -365,15 +197,16 @@ class BrowserStackOfficialDownloads:
     section_xpath = G2_BROWSERSTACK_XPATHS["official_downloads_section"]
     show_more_xpath = G2_BROWSERSTACK_XPATHS["official_downloads_show_more"]
 
-    def __init__(self, driver):
+    def __init__(self, driver, human_simulator):
         self.driver = driver
+        self.human_simulator = human_simulator
 
     def explore(self):
         section = WebDriverWait(self.driver, 15).until(
             EC.presence_of_element_located((By.XPATH, self.section_xpath))
         )
-        wheel_to_element(self.driver, section)
-        hover_with_mouse(self.driver, section, 1.0)
+        self.human_simulator.native_wheel_to_element(section)
+        self.human_simulator.native_hover(section, 1.0)
         control = WebDriverWait(self.driver, 10).until(
             EC.presence_of_element_located((By.XPATH, self.show_more_xpath))
         )
@@ -383,9 +216,9 @@ class BrowserStackOfficialDownloads:
         )
         target = candidates[0] if candidates else control
         before_length = len(section.text)
-        wheel_to_element(self.driver, target)
-        hover_with_mouse(self.driver, target, 0.7)
-        click_with_mouse(self.driver, target)
+        self.human_simulator.native_wheel_to_element(target)
+        self.human_simulator.native_hover(target, 0.7)
+        self.human_simulator.native_click(target)
         try:
             WebDriverWait(self.driver, 4, poll_frequency=0.2).until(
                 lambda _: "show less" in section.text.lower()
@@ -404,24 +237,24 @@ class BrowserStackReviews:
     heading_xpath = G2_BROWSERSTACK_XPATHS["reviews_heading"]
     text_xpath = G2_BROWSERSTACK_XPATHS["reviews_text"]
 
-    def __init__(self, driver):
+    def __init__(self, driver, human_simulator):
         self.driver = driver
+        self.human_simulator = human_simulator
 
     def explore(self):
         heading = WebDriverWait(self.driver, 15).until(
             EC.presence_of_element_located((By.XPATH, self.heading_xpath))
         )
         logger.info("Moving to BrowserStack Reviews section with mouse wheel")
-        wheel_to_element(self.driver, heading)
+        self.human_simulator.native_wheel_to_element(heading)
         review_text = WebDriverWait(self.driver, 5).until(
             EC.visibility_of_element_located((By.XPATH, self.text_xpath))
         )
         hover_time = random.uniform(0.4, 1.3)
         logger.info(f"Moving mouse over BrowserStack review text for {hover_time:.1f}s")
-        hover_with_mouse(self.driver, review_text, hover_time)
+        self.human_simulator.native_hover(review_text, hover_time)
         try:
-            phrase = select_visible_phrase_with_mouse(
-                self.driver,
+            phrase = self.human_simulator.select_visible_phrase(
                 review_text,
                 min_words=random.randint(1, 3),
                 max_words=random.randint(5, 10),
@@ -437,15 +270,16 @@ class BrowserStackReviewCard:
 
     review_xpath = G2_BROWSERSTACK_XPATHS["target_review"]
 
-    def __init__(self, driver):
+    def __init__(self, driver, human_simulator):
         self.driver = driver
+        self.human_simulator = human_simulator
 
     def explore(self):
         review = WebDriverWait(self.driver, 12).until(
             EC.visibility_of_element_located((By.XPATH, self.review_xpath))
         )
         logger.info("Moving to targeted BrowserStack review with mouse wheel")
-        wheel_to_element(self.driver, review)
+        self.human_simulator.native_wheel_to_element(review)
         text_candidates = [
             element for element in review.find_elements(By.CSS_SELECTOR, "p, h3, h4, span")
             if element.is_displayed()
@@ -458,9 +292,8 @@ class BrowserStackReviewCard:
         target = random.choice(text_candidates) if text_candidates else review
         hover_time = random.uniform(0.5, 1.5)
         logger.info(f"Moving mouse over random targeted review text for {hover_time:.1f}s")
-        hover_with_mouse(self.driver, target, hover_time)
-        phrase = select_visible_phrase_with_mouse(
-            self.driver,
+        self.human_simulator.native_hover(target, hover_time)
+        phrase = self.human_simulator.select_visible_phrase(
             target,
             min_words=random.randint(1, 4),
             max_words=random.randint(6, 10),
@@ -474,8 +307,9 @@ class BrowserStackReviewsScrollArea:
 
     area_xpath = G2_BROWSERSTACK_XPATHS["reviews_scroll_area"]
 
-    def __init__(self, driver):
+    def __init__(self, driver, human_simulator):
         self.driver = driver
+        self.human_simulator = human_simulator
 
     def explore(self):
         area = WebDriverWait(self.driver, 15).until(
@@ -493,14 +327,14 @@ class BrowserStackReviewsScrollArea:
             target = random.choice(read_more)
             logger.info(f"Selected one Read More from {len(read_more)} available controls")
             logger.info("Moving to selected Read More with mouse wheel")
-            wheel_to_element(self.driver, target)
+            self.human_simulator.native_wheel_to_element(target)
             hover_time = random.uniform(0.4, 1.2)
             logger.info(f"Hovering over selected Read More for {hover_time:.1f}s")
-            hover_with_mouse(self.driver, target, hover_time)
+            self.human_simulator.native_hover(target, hover_time)
             pre_click_pause = random.uniform(0.3, 1.0)
             logger.info(f"Pausing {pre_click_pause:.1f}s before Read More click")
             time.sleep(pre_click_pause)
-            click_with_mouse(self.driver, target)
+            self.human_simulator.native_click(target)
             logger.info("Clicked one random review Read More with mouse")
             time.sleep(random.uniform(0.7, 1.8))
         else:
@@ -535,13 +369,10 @@ class BrowserStackReviewsScrollArea:
                 logger.info(
                     f"Moving mouse over random review text for {hover_time:.1f}s"
                 )
-                hover_with_mouse(
-                    self.driver, reading_text, hover_time
-                )
+                self.human_simulator.native_hover(reading_text, hover_time)
                 if step_index == selection_step:
                     try:
-                        phrase = select_visible_phrase_with_mouse(
-                            self.driver,
+                        phrase = self.human_simulator.select_visible_phrase(
                             reading_text,
                             min_words=random.randint(2, 4),
                             max_words=random.randint(6, 10),
@@ -567,11 +398,7 @@ class BrowserStackReviewsScrollArea:
                 f"Reviews mouse scroll {step_index}/{target_moves}: "
                 f"{'down' if direction > 0 else 'up'} {distance}px"
             )
-            scroll_with_mouse(
-                self.driver,
-                direction * distance,
-                area=area,
-            )
+            self.human_simulator.native_scroll(direction * distance, area=area)
             time.sleep(random.uniform(0.2, 0.6))
         logger.info("Finished BrowserStack Reviews scroll pass")
 
@@ -581,8 +408,9 @@ class BrowserStackReviewsPagination:
 
     pagination_xpath = G2_BROWSERSTACK_XPATHS["reviews_pagination"]
 
-    def __init__(self, driver):
+    def __init__(self, driver, human_simulator):
         self.driver = driver
+        self.human_simulator = human_simulator
 
     def explore(self):
         pagination = WebDriverWait(self.driver, 15).until(
@@ -590,7 +418,7 @@ class BrowserStackReviewsPagination:
         )
         logger.info("Found BrowserStack Reviews pagination")
         logger.info("Moving to Reviews pagination with mouse wheel")
-        wheel_to_element(self.driver, pagination)
+        self.human_simulator.native_wheel_to_element(pagination)
         page_links = [
             link for link in pagination.find_elements(
                 By.CSS_SELECTOR, "li.pagination__page-number a"
@@ -608,9 +436,9 @@ class BrowserStackReviewsPagination:
         )
         hover_time = random.uniform(0.4, 1.2)
         logger.info(f"Hovering over Reviews page {page_number} for {hover_time:.1f}s")
-        hover_with_mouse(self.driver, target, hover_time)
+        self.human_simulator.native_hover(target, hover_time)
         old_url = self.driver.current_url
-        click_with_mouse(self.driver, target)
+        self.human_simulator.native_click(target)
         logger.info(f"Clicked Reviews page {page_number} with mouse")
         try:
             WebDriverWait(self.driver, 8, poll_frequency=0.2).until(
@@ -630,8 +458,9 @@ class TopRatedAlternatives:
 
     section_xpath = G2_BROWSERSTACK_XPATHS["top_rated_alternatives"]
 
-    def __init__(self, driver):
+    def __init__(self, driver, human_simulator):
         self.driver = driver
+        self.human_simulator = human_simulator
 
     def explore(self):
         section = WebDriverWait(self.driver, 15).until(
@@ -639,10 +468,10 @@ class TopRatedAlternatives:
         )
         logger.info("Found Top-Rated Alternatives section")
         logger.info("Scrolling to Top-Rated Alternatives with mouse wheel")
-        wheel_to_element(self.driver, section)
+        self.human_simulator.native_wheel_to_element(section)
         hover_time = random.uniform(0.4, 1.2)
         logger.info(f"Moving mouse over Top-Rated Alternatives for {hover_time:.1f}s")
-        hover_with_mouse(self.driver, section, hover_time)
+        self.human_simulator.native_hover(section, hover_time)
         logger.info("Reached Top-Rated Alternatives section")
 
 
@@ -965,8 +794,6 @@ class G2Page:
         in this module and selected through run_g2_product().
         """
         human = self.human_simulator
-        if not isinstance(human, BrowserStackHumanSimulator):
-            human = BrowserStackHumanSimulator(self.driver, use_native_cursor=True)
         if not human.use_native_cursor or human.pyautogui is None:
             raise RuntimeError(
                 "Native mouse control is unavailable; BrowserStack run stopped"
@@ -978,8 +805,7 @@ class G2Page:
                 "No visible desktop is available for BrowserStack mouse control"
             )
 
-        self.driver._browserstack_human = human
-        logger.info("Using BrowserStack native mouse cursor and wheel flow")
+        logger.info("Using shared HumanSimulator native mouse and wheel flow")
         return G2BrowserStack(self.driver, human).run()
 
     def run_g2_product(self):
@@ -987,6 +813,24 @@ class G2Page:
         if self.product == "BrowserStack":
             return self.run_g2_browserstack()
         return self.run_g2_saucelabs()
+
+    def select_saucelabs_phrase(self):
+        """Select one visible Sauce Labs phrase using shared native behavior."""
+        candidates = [
+            element for element in self.human_simulator._visible_reading_elements()
+            if element.is_displayed()
+            and len(re.findall(r"[A-Za-z]+", element.text or "")) >= 4
+        ]
+        if not candidates:
+            raise RuntimeError("No visible Sauce Labs text is available")
+        target = random.choice(candidates)
+        self.human_simulator.native_wheel_to_element(target)
+        self.human_simulator.native_hover(target, random.uniform(0.4, 1.0))
+        return self.human_simulator.select_visible_phrase(
+            target,
+            min_words=random.randint(1, 3),
+            max_words=random.randint(6, 10),
+        )
 
     def run_g2_saucelabs(self):
         try:
@@ -1027,33 +871,20 @@ class G2Page:
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
 
-            total_words = random.choice([4, 5, 6, 9])
-            first_count = random.randint(1, min(3, total_words - 2))
-            second_count = random.randint(1, min(2, total_words - first_count - 1))
-            final_count = total_words - first_count - second_count
-
             self.click_one_random_show_more()
             self.close_login_modal_if_present(timeout=0.4)
-            first_words = self.human_simulator.select_random_words(first_count)
-            logger.info(f"Mouse-selected on Sauce Labs page: {first_words}")
+            first_phrase = self.select_saucelabs_phrase()
+            logger.info(f"Mouse-selected Sauce Labs phrase 1: {first_phrase!r}")
             self.human_simulator.move_mouse_around(moves=2)
             self.close_login_modal_if_present(timeout=0.4)
-            second_words = self.human_simulator.select_random_words(
-                second_count, already_selected=first_words
-            )
-            logger.info(f"Mouse-selected on Alternatives page: {second_words}")
+            second_phrase = self.select_saucelabs_phrase()
+            logger.info(f"Mouse-selected Sauce Labs phrase 2: {second_phrase!r}")
             try:
                 self.open_fifth_breadcrumb()
             except Exception:
                 logger.error("Not Found fifth breadcrumb")
-            final_words = self.human_simulator.select_random_words(
-                final_count, already_selected=first_words + second_words
-            )
-            logger.info(f"Mouse-selected after breadcrumb: {final_words}")
-            logger.info(
-                f"Total distinct words selected: "
-                f"{len(first_words + second_words + final_words)}"
-            )
+            third_phrase = self.select_saucelabs_phrase()
+            logger.info(f"Mouse-selected Sauce Labs phrase 3: {third_phrase!r}")
             try:
                 browsing = self.browse_g2_page()
                 logger.info(f"Varied G2 browsing: {browsing}")
@@ -1091,7 +922,7 @@ class G2BrowserStack(G2Page):
         if not buttons:
             raise RuntimeError("G2 login modal has no visible close button")
         close_button = max(buttons, key=lambda button: button.rect["x"] - button.rect["y"])
-        click_with_mouse(self.driver, close_button)
+        self.human_simulator.native_click(close_button)
         WebDriverWait(self.driver, 3, poll_frequency=0.1).until(
             EC.invisibility_of_element_located((By.ID, "login-modal"))
         )
@@ -1106,32 +937,27 @@ class G2BrowserStack(G2Page):
             f"Random Reviews interaction target: {target_duration:.1f}s"
         )
         interactions = [
-            ("BrowserStack Reviews", BrowserStackReviews(self.driver).explore),
-            ("Targeted Review", BrowserStackReviewCard(self.driver).explore),
-            ("Reviews Scroll Area", BrowserStackReviewsScrollArea(self.driver).explore),
-            ("Reviews Pagination", BrowserStackReviewsPagination(self.driver).explore),
-            ("Top-Rated Alternatives", TopRatedAlternatives(self.driver).explore),
+            ("BrowserStack Reviews", BrowserStackReviews(
+                self.driver, self.human_simulator
+            ).explore),
+            ("Targeted Review", BrowserStackReviewCard(
+                self.driver, self.human_simulator
+            ).explore),
+            ("Reviews Scroll Area", BrowserStackReviewsScrollArea(
+                self.driver, self.human_simulator
+            ).explore),
+            ("Reviews Pagination", BrowserStackReviewsPagination(
+                self.driver, self.human_simulator
+            ).explore),
+            ("Top-Rated Alternatives", TopRatedAlternatives(
+                self.driver, self.human_simulator
+            ).explore),
         ]
-        selected_count = random.randint(2, len(interactions))
-        selected_indexes = set(
-            random.sample(range(len(interactions)), selected_count)
+        self.human_simulator.run_random_actions(
+            interactions,
+            min_actions=2,
+            max_actions=len(interactions),
         )
-        selected_names = [
-            name for index, (name, _) in enumerate(interactions)
-            if index in selected_indexes
-        ]
-        logger.info(f"Randomly selected interaction classes: {selected_names}")
-
-        for index, (name, action) in enumerate(interactions):
-            if index not in selected_indexes:
-                logger.info(f"Randomly skipped interaction class: {name}")
-                continue
-            logger.info(f"Starting interaction class: {name}")
-            try:
-                action()
-                logger.info(f"Completed interaction class: {name}")
-            except (RuntimeError, TimeoutException) as error:
-                logger.warning(f"Skipped unavailable interaction class {name}: {error}")
         elapsed = time.monotonic() - started_at
         remaining = target_duration - elapsed
         if remaining > 0:
@@ -1161,9 +987,9 @@ class G2BrowserStack(G2Page):
             self.wait_for_google_verification()
             result = self.find_exact_result_link(expected_text)
             if result is not None:
-                wheel_to_element(self.driver, result)
+                self.human_simulator.native_wheel_to_element(result)
                 return result
-            scroll_with_mouse(self.driver, random.randint(220, 380))
+            self.human_simulator.native_scroll(random.randint(220, 380))
             time.sleep(random.uniform(0.8, 1.4))
         return None
 
@@ -1218,10 +1044,10 @@ class G2BrowserStack(G2Page):
             logger.warning(f"Google page location: {parsed.netloc}{parsed.path}")
             raise RuntimeError(f"Could not find Google result: {self.target_text}")
 
-        hover_with_mouse(self.driver, result, 1.2)
+        self.human_simulator.native_hover(result, 1.2)
         search_url = self.driver.current_url
         search_handles = set(self.driver.window_handles)
-        click_with_mouse(self.driver, result)
+        self.human_simulator.native_click(result)
         try:
             self.wait_for_g2_result(timeout=18)
         except RuntimeError:
@@ -1229,8 +1055,8 @@ class G2BrowserStack(G2Page):
                     or set(self.driver.window_handles) != search_handles):
                 raise
             logger.warning("Google result click did not navigate; retrying mouse click once")
-            hover_with_mouse(self.driver, result, 0.6)
-            click_with_mouse(self.driver, result)
+            self.human_simulator.native_hover(result, 0.6)
+            self.human_simulator.native_click(result)
             self.wait_for_g2_result(timeout=18)
         logger.info(f"Opened result: {self.driver.current_url}")
 
@@ -1241,7 +1067,9 @@ class G2BrowserStack(G2Page):
         ).explore()
         BrowserStackIntegrations(self.driver, self.human_simulator).explore()
         BrowserStackMedia(self.driver, self.human_simulator).explore()
-        BrowserStackOfficialDownloads(self.driver).explore()
+        BrowserStackOfficialDownloads(
+            self.driver, self.human_simulator
+        ).explore()
         self.explore_reviews()
 
     def run_reviews_only(self):

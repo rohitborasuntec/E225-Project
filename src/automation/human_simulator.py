@@ -544,6 +544,178 @@ class HumanSimulator:
         )
         time.sleep(duration)
 
+    def native_screen_point(self, viewport_x, viewport_y, allow_overshoot=False):
+        """Convert viewport coordinates to safe native desktop coordinates."""
+        if not self.use_native_cursor or self.pyautogui is None:
+            raise RuntimeError("A working native mouse cursor is required")
+        metrics = self.driver.execute_script(
+            "return {x:screenX, y:screenY, chrome:outerHeight-innerHeight};"
+        )
+        point = (
+            round(metrics["x"] + viewport_x),
+            round(metrics["y"] + metrics["chrome"] + viewport_y),
+        )
+        desktop = self.pyautogui.size()
+        if allow_overshoot:
+            if not (-80 <= point[0] < desktop.width + 80
+                    and -80 <= point[1] < desktop.height + 80):
+                raise RuntimeError(f"Native mouse path point {point} is off-screen")
+            return (
+                min(max(point[0], 2), desktop.width - 3),
+                min(max(point[1], 2), desktop.height - 3),
+            )
+        if not (0 <= point[0] < desktop.width and 0 <= point[1] < desktop.height):
+            raise RuntimeError(f"Native mouse target {point} is off-screen")
+        return point
+
+    def native_scroll(self, pixels, area=None):
+        """Scroll with the OS mouse wheel, optionally over a specific area."""
+        if area is None:
+            width, height = self.driver.execute_script(
+                "return [innerWidth, innerHeight];"
+            )
+            viewport_x, viewport_y = width / 2, height / 2
+        else:
+            point = self.driver.execute_script(
+                "const r=arguments[0].getBoundingClientRect();"
+                "const l=Math.max(0,r.left), rr=Math.min(innerWidth,r.right);"
+                "const t=Math.max(0,r.top), b=Math.min(innerHeight,r.bottom);"
+                "return rr>l && b>t ? {x:(l+rr)/2,y:(t+b)/2} : null;",
+                area,
+            )
+            if point is None:
+                raise RuntimeError("Scroll area is outside the visible viewport")
+            viewport_x, viewport_y = point["x"], point["y"]
+        x, y = self.native_screen_point(viewport_x, viewport_y)
+        self.pyautogui.moveTo(x, y, duration=random.uniform(0.15, 0.3))
+        notches = max(2, min(6, round(abs(pixels) / 70)))
+        wheel_tick = -1 if pixels > 0 else 1
+        for _ in range(notches):
+            self.pyautogui.scroll(wheel_tick)
+            time.sleep(random.uniform(0.06, 0.14))
+        time.sleep(0.2)
+
+    def native_wheel_to_element(self, element, max_attempts=35):
+        """Bring an element into view using only native wheel events."""
+        for _ in range(max_attempts):
+            position = self.driver.execute_script(
+                "const r=arguments[0].getBoundingClientRect();"
+                "return {middle:r.top+r.height/2, viewport:innerHeight};",
+                element,
+            )
+            distance = position["middle"] - position["viewport"] * 0.5
+            if abs(distance) < position["viewport"] * 0.3:
+                return
+            step = min(280, max(70, int(abs(distance))))
+            self.native_scroll(step if distance > 0 else -step)
+            time.sleep(random.uniform(0.15, 0.35))
+        raise RuntimeError("Could not reach element with native wheel scrolling")
+
+    def native_hover(self, element, seconds=0.8):
+        """Move the OS cursor to the visible center of an element."""
+        rect = self.driver.execute_script(
+            "const r=arguments[0].getBoundingClientRect();"
+            "return {x:r.x+r.width/2,y:r.y+r.height/2,"
+            "width:innerWidth,height:innerHeight};",
+            element,
+        )
+        if not (0 < rect["x"] < rect["width"] and 0 < rect["y"] < rect["height"]):
+            raise RuntimeError("Mouse target is outside the visible viewport")
+        x, y = self.native_screen_point(rect["x"], rect["y"])
+        self.pyautogui.moveTo(x, y, duration=random.uniform(0.25, 0.65))
+        time.sleep(seconds)
+
+    def native_click(self, element):
+        """Hover and click an element with the OS cursor."""
+        self.native_hover(element, random.uniform(0.2, 0.5))
+        self.pyautogui.click()
+
+    def select_visible_phrase(self, root, min_words=1, max_words=10):
+        """Drag-select one visible phrase inside an element with the OS mouse."""
+        word_count = random.randint(min_words, max_words)
+        points = self.driver.execute_script(
+            "const root=arguments[0], count=arguments[1];"
+            "const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);"
+            "const out=[];let n;while((n=w.nextNode())){"
+            "if(!n.parentElement||!n.parentElement.getClientRects().length)continue;"
+            "const words=[...n.data.matchAll(/[A-Za-z]+/g)];"
+            "for(let i=0;i<=words.length-count;i++){"
+            "const f=words[i],l=words[i+count-1],a=document.createRange(),b=document.createRange();"
+            "a.setStart(n,f.index);a.setEnd(n,f.index+1);"
+            "b.setStart(n,l.index+l[0].length-1);b.setEnd(n,l.index+l[0].length);"
+            "const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();"
+            "if(ar.top>=80&&br.bottom<innerHeight-20&&ar.left>=0&&br.right<innerWidth)"
+            "out.push({sx:ar.left+1,sy:ar.top+ar.height/2,ex:br.right-1,ey:br.top+br.height/2});"
+            "}}return out.length?out[Math.floor(Math.random()*out.length)]:null;",
+            root,
+            word_count,
+        )
+        if not points:
+            raise RuntimeError("No visible phrase available for mouse selection")
+        start = self.native_screen_point(points["sx"], points["sy"])
+        end = self.native_screen_point(points["ex"], points["ey"])
+        self.pyautogui.moveTo(*start, duration=random.uniform(0.2, 0.4))
+        self.pyautogui.mouseDown()
+        try:
+            time.sleep(random.uniform(0.15, 0.35))
+            self.pyautogui.moveTo(*end, duration=random.uniform(0.35, 0.7))
+        finally:
+            self.pyautogui.mouseUp()
+        selected = (
+            self.driver.execute_script("return window.getSelection().toString();")
+            or ""
+        ).strip()
+        selected_word_count = len(re.findall(r"[A-Za-z]+", selected))
+        if selected_word_count == 0:
+            raise RuntimeError("Mouse drag did not select visible text")
+        if not min_words <= selected_word_count <= max_words:
+            logger.info(
+                "Mouse selected %s rendered words; requested range was %s-%s",
+                selected_word_count,
+                min_words,
+                max_words,
+            )
+        time.sleep(random.uniform(1.2, 2.5))
+        return selected
+
+    def run_random_actions(self, actions, min_actions=1, max_actions=None):
+        """Run a random subset of named actions while preserving their order.
+
+        ``actions`` is an iterable of ``(name, callable)`` pairs. Individual
+        action failures are logged and do not stop the remaining human-like
+        browsing actions.
+        """
+        actions = list(actions)
+        if not actions:
+            return {"selected": [], "completed": [], "failed": []}
+
+        upper = len(actions) if max_actions is None else min(max_actions, len(actions))
+        lower = max(1, min(min_actions, upper))
+        selected_count = random.randint(lower, upper)
+        selected_indexes = set(random.sample(range(len(actions)), selected_count))
+        selected = [
+            name for index, (name, _) in enumerate(actions)
+            if index in selected_indexes
+        ]
+        logger.info(f"Randomly selected interaction classes: {selected}")
+
+        completed = []
+        failed = []
+        for index, (name, action) in enumerate(actions):
+            if index not in selected_indexes:
+                logger.info(f"Randomly skipped interaction class: {name}")
+                continue
+            logger.info(f"Starting interaction class: {name}")
+            try:
+                action()
+                completed.append(name)
+                logger.info(f"Completed interaction class: {name}")
+            except Exception as error:
+                failed.append(name)
+                logger.warning(f"Skipped unavailable interaction class {name}: {error}")
+
+        return {"selected": selected, "completed": completed, "failed": failed}
+
     def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
         total_scroll = (
             total_scroll if total_scroll is not None

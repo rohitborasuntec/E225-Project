@@ -1,4 +1,6 @@
 # logger.py
+import csv
+import io
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -7,6 +9,24 @@ import sys
 
 # Global logger instance
 _logger = None
+
+
+class CsvFormatter(logging.Formatter):
+    """Format one logging record as a valid CSV row."""
+
+    def format(self, record):
+        message = record.getMessage()
+        if record.exc_info:
+            message = f"{message}\n{self.formatException(record.exc_info)}"
+
+        row = io.StringIO(newline="")
+        csv.writer(row).writerow([
+            datetime.fromtimestamp(record.created).strftime("%Y-%m-%d %H:%M:%S"),
+            record.levelname,
+            record.name,
+            message,
+        ])
+        return row.getvalue().rstrip("\r\n")
 
 def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     """
@@ -27,10 +47,14 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     
     date_str = datetime.now().strftime("%Y-%m-%d")
     log_path = Path(log_dir) / date_str
-    log_path.mkdir(parents=True, exist_ok=True)
+    text_log_path = log_path / "log"
+    csv_log_path = log_path / "csv"
+    text_log_path.mkdir(parents=True, exist_ok=True)
+    csv_log_path.mkdir(parents=True, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = log_path / f"{name}_{timestamp}.log"
+    log_file = text_log_path / f"{name}_{timestamp}.log"
+    csv_file = csv_log_path / f"{name}_{timestamp}.csv"
     
     logger = logging.getLogger(name)
     logger.setLevel(log_level)
@@ -54,6 +78,21 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+
+    csv_is_empty = not csv_file.exists() or csv_file.stat().st_size == 0
+    if csv_is_empty:
+        with csv_file.open("w", newline="", encoding="utf-8") as stream:
+            csv.writer(stream).writerow(["Timestamp", "Level", "Logger", "Message"])
+
+    csv_handler = RotatingFileHandler(
+        csv_file,
+        maxBytes=10 * 1024 * 1024,
+        backupCount=10,
+        encoding="utf-8",
+    )
+    csv_handler.setLevel(logging.DEBUG)
+    csv_handler.setFormatter(CsvFormatter())
+    logger.addHandler(csv_handler)
     
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
@@ -65,6 +104,7 @@ def get_logger(name="E225Project", log_dir="Logs", log_level=logging.INFO):
     
     logger.info("=" * 70)
     logger.info(f"Logger initialized: {log_file}")
+    logger.info(f"CSV logger initialized: {csv_file}")
     logger.info("=" * 70)
     
     return logger
