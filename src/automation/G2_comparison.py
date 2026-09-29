@@ -11,6 +11,7 @@ from selenium.webdriver.common.by import By
 from src.commons import *
 from src.automation.human_simulator import HumanSimulator
 from src.automation.xpath_pools import G2_COMPARISON_POOL
+from src.automation.errors import AccessDeniedError          # <-- NEW
 from src.logging import logger
 
 
@@ -25,9 +26,8 @@ class G2Comparison:
     # OPEN G2 COMPARE PAGE
     # ==================================================================
     def open_g2_compare_page(self):
-        # logger.info("Opening Sauce Labs reviews page...")
         save_html(self.driver.page_source, "G2_Comparison_Page")
-        
+
         # Cookie banner
         try:
             cookie_banner = self.driver.find_elements(
@@ -59,7 +59,6 @@ class G2Comparison:
             f"//*[contains(text(),'{self.comparing_product}')]"
             f"/../../..//*[contains(text(),'Compare Now')]//ancestor::a"
         )
-        # //button[contains(.,'Reject Non-Essential')]x
         logger.info("Searching for comparison block...")
         start_time = time.time()
         while time.time() - start_time < 30:
@@ -108,14 +107,24 @@ class G2Comparison:
 
         self.open_g2_compare_page()
         logger.info("Comparison page opened.")
-        for i in range(5):
-            if check_for_block(self.driver):
-                self.driver.refresh()
-            else:
+
+        # --- CHANGED: raise AccessDeniedError so the outer loop can retry
+        #              the whole product/comparing_product pair on a new VPN.
+        for refresh_attempt in range(5):
+            if not check_for_block(self.driver):
                 break
+            logger.warning(
+                f"[G2 Comparison] Access-Denied page detected "
+                f"(refresh {refresh_attempt + 1}/5)"
+            )
+            self.driver.refresh()
+            time.sleep(random.uniform(3, 5))
         else:
-            logger.error("Access Denied")
-            raise Exception("Access Denied")
+            logger.error("G2 Comparison page is still Access Denied "
+                         "after 5 refreshes")
+            raise AccessDeniedError("G2 Comparison page got Access Denied")
+        # --------------------------------------------------------------------
+
         self.browse_comparison_page(duration=60)
         logger.info("Comparison page browsing completed.")
 
@@ -153,8 +162,17 @@ class G2Comparison:
         logger.info("Complete Sauce Labs flow finished.")
 
     def run_g2_comparisons(self):
+        """
+        Run the comparison flow.
+
+        Important: AccessDeniedError is RE-RAISED so the top-level runner
+        can restart the whole pair on a fresh VPN. All other exceptions are
+        logged and swallowed (comparison failure is not fatal for the row).
+        """
         try:
             self.process_sauce_labs_comparison()
+        except AccessDeniedError:
+            raise                                   # <-- let caller retry
         except Exception as error:
             logger.error(f"ERROR OCCURRED: {error}")
 

@@ -20,10 +20,38 @@ duration = 60
 def check_for_block(driver):
     acc_den_xpath = '//*[contains(.,"Access is temporarily restricted")]'
     if driver.find_elements(By.XPATH, acc_den_xpath):
-        breakpoint()
+        # breakpoint()
         return True
     return False
 
+
+# def check_for_block(driver):
+#     """
+#     Return True if the current page looks like a G2 / Cloudflare block page.
+
+#     Adjust the selectors / title checks to your own environment if needed.
+#     """
+#     try:
+#         title = (driver.title or "").lower()
+#         source = (driver.page_source or "").lower()
+#     except Exception:
+#         return False
+
+#     block_markers = (
+#         "access denied",
+#         "are you a human",
+#         "attention required",
+#         "just a moment",
+#         "checking your browser",
+#         "cloudflare",
+#         "captcha",
+#         "verify you are human",
+#     )
+#     if any(marker in title for marker in block_markers):
+#         return True
+#     if "access denied" in source and "g2.com" in source:
+#         return True
+#     return False
 
 def wait_for_element(driver, locator, timeout=10, condition="visible", poll=0.5):
     conditions = {

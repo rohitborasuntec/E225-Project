@@ -311,7 +311,7 @@ class Browser:
 
         # IMPORTANT:
         # Default to Chrome instead of randomly selecting a browser.
-        requested = browser_name or "Chrome"
+        requested = browser_name or random.choice(self.SUPPORTED)
 
         key = requested.strip().lower()
 

@@ -26,74 +26,79 @@ class GoogleSearch:
             logger.warning("Google CAPTCHA detected — waiting for manual solve.")
             input("Robot: after solving the CAPTCHA press ENTER to continue...")
 
-    def search_work(self, keywords):
-        for keyword in keywords:
-            query = get_random_word_or_sentence_faker(keyword).lower()
+    def search_work(self, keyword_combos):
+        
+        for keyword_combo in keyword_combos:
+            keywords = keyword_combo[0]
+            sug = keyword_combo[1]
 
-            wait_for_element(
-                self.driver,
-                (By.XPATH, '//*[@aria-label="Google"]'),
-                condition="visible",
-            )
-            
-            try:
-                self.human_simulator.input_search_query(query)
-            except Exception:
-                logger.info("Google page may not have opened correctly, retrying.")
-                self.get_google(query=keyword)
+            for keyword in keywords:
+                query = get_random_word_or_sentence_faker(keyword).lower()
 
-            wait_for_element(
-                self.driver,
-                (By.XPATH, '//a[@aria-label="Go to Google Home"]'),
-                condition="visible",
-            )
-            self.check_for_bot()
-
-            xpath_trans = self.change_in_eng()
-            if xpath_trans:
-                self.human_simulator.mouse_click_after_hover(
-                    self.driver.find_element(By.XPATH, xpath_trans)
+                wait_for_element(
+                    self.driver,
+                    (By.XPATH, '//*[@aria-label="Google"]'),
+                    condition="visible",
                 )
-                logger.info(f"Translation done for {keyword}")
-
-            refuse_xpath = "//*[contains(text(),'Reject all')]"
-            
-            if self.driver.find_elements(By.XPATH,refuse_xpath):
-                self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, xpath_trans))
-                logger.info(f"Reject All done")
-
-            
-            save_html(html_text=self.driver.page_source, file_name=query)
-
-            clicked = False
-            for attempt in range(10):
+                
                 try:
-                    elem_xpath = self.get_elem_xpaths()
-                    logger.info(f"Attempt {attempt + 1}: Elem XPath found: {elem_xpath}")
-                    try:
-                        element = self.driver.find_element(By.XPATH, elem_xpath)
-                        self.human_simulator.move_to_element_like_human(element)
-                        self.human_simulator.mouse_click_after_hover(
-                            self.driver.find_element(By.XPATH, elem_xpath)
-                        )
-                        clicked = True
-                        break
-                    except Exception as e:
-                        logger.warning(f"{elem_xpath} not found: {e}")
-                        self.human_simulator.scroll_page(
-                            total_scroll=5, step_delay=0.1, direction="down"
-                        )
-                except Exception as e:
-                    logger.error(f"random_words failed for keyword '{keyword}': {e}")
+                    self.human_simulator.input_search_query(query,suggestion=sug)
+                except Exception:
+                    logger.info("Google page may not have opened correctly, retrying.")
+                    self.get_google(query=keyword)
 
-            if not clicked:
-                logger.error(
-                    f"Could not find/click any element after 10 attempts "
-                    f"for query '{query}'"
+                wait_for_element(
+                    self.driver,
+                    (By.XPATH, '//a[@aria-label="Go to Google Home"]'),
+                    condition="visible",
                 )
-            self.human_simulator.browse_page_randomly(
-                duration=10, pool=GOOGLE_RESULTS_POOL
-            )
+                self.check_for_bot()
+
+                xpath_trans = self.change_in_eng()
+                if xpath_trans:
+                    self.human_simulator.mouse_click_after_hover(
+                        self.driver.find_element(By.XPATH, xpath_trans)
+                    )
+                    logger.info(f"Translation done for {keyword}")
+
+                refuse_xpath = "//*[contains(text(),'Reject all')]"
+                
+                if self.driver.find_elements(By.XPATH,refuse_xpath):
+                    self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, xpath_trans))
+                    logger.info(f"Reject All done")
+
+                
+                save_html(html_text=self.driver.page_source, file_name=query)
+
+                clicked = False
+                for attempt in range(10):
+                    try:
+                        elem_xpath = self.get_elem_xpaths()
+                        logger.info(f"Attempt {attempt + 1}: Elem XPath found: {elem_xpath}")
+                        try:
+                            element = self.driver.find_element(By.XPATH, elem_xpath)
+                            self.human_simulator.move_to_element_like_human(element)
+                            self.human_simulator.mouse_click_after_hover(
+                                self.driver.find_element(By.XPATH, elem_xpath)
+                            )
+                            clicked = True
+                            break
+                        except Exception as e:
+                            logger.warning(f"{elem_xpath} not found: {e}")
+                            self.human_simulator.scroll_page(
+                                total_scroll=5, step_delay=0.1, direction="down"
+                            )
+                    except Exception as e:
+                        logger.error(f"random_words failed for keyword '{keyword}': {e}")
+
+                if not clicked:
+                    logger.error(
+                        f"Could not find/click any element after 10 attempts "
+                        f"for query '{query}'"
+                    )
+                self.human_simulator.browse_page_randomly(
+                    duration=10, pool=GOOGLE_RESULTS_POOL
+                )
 
     def get_google(self, query=None, blocked=False):
         url = "https://www.google.com"

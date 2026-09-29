@@ -20,7 +20,16 @@ of native-mouse geometry.
 """
 
 from __future__ import annotations
+from src.commons import wait_for_element, save_html, check_for_block
+from src.automation.human_simulator import HumanSimulator
+from src.automation.xpath_pools import (
+    G2_BROWSERSTACK_XPATHS,
+    G2_PAGE_XPATHS,
+    G2_PRODUCT_POOL,
+)
+from src.automation.errors import AccessDeniedError
 
+from src.logging import logger
 import argparse
 import random
 import re
@@ -1090,7 +1099,7 @@ class G2Page:
 
     def run_g2_saucelabs(self):
         try:
-            logger.info("G2 Sauce Labs automation started")
+            logger.info(f"G2 {self.product} automation started")
 
             wait_for_element(
                 self.driver,
@@ -1105,23 +1114,25 @@ class G2Page:
 
             result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
-                breakpoint()
-                save_html(self.driver.page_source, "G2_SauceLabs")
-                # raise RuntimeError(
-                #     f"Could not find the exact Google result: {self.target_text}"
-                # )
+                # breakpoint()
+                save_html(self.driver.page_source, f"G2_{self.product}")
+                logger.error(f"Could not find the exact Google result: {self.target_text}")
+                raise RuntimeError(
+                    f"Could not find the exact Google result: {self.target_text}"
+                )
 
             self.human_simulator.move_mouse_around(moves=2)
             self.human_simulator.mouse_hover(result_link, hover_time=1.2)
             result_url = result_link.get_attribute("href")
             self.human_simulator.mouse_click_after_hover(result_link)
+
             try:
                 self._poll(self.switch_to_g2_page, timeout=10, poll=0.3)
             except TimeoutError:
                 if not result_url:
-                    breakpoint()
-                    save_html(self.driver.page_source, "G2_SauceLabs")
-                    # raise RuntimeError("Sauce Labs Google result has no URL")
+                    # breakpoint()
+                    save_html(self.driver.page_source, f"G2_{self.product}")
+                    raise RuntimeError("Sauce Labs Google result has no URL")
                 logger.warning(
                     "Sauce Labs mouse click did not navigate; retrying the "
                     "same Google result URL"
@@ -1130,25 +1141,43 @@ class G2Page:
                 self._poll(self.switch_to_g2_page, timeout=20, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
 
-            for i in range(5):
-                if check_for_block(self.driver):
-                    self.driver.refresh()
-                    time.sleep(randint(3, 5))
-                else:
+            # for i in range(5):
+            #     if check_for_block(self.driver):
+            #         self.driver.refresh()
+            #         time.sleep(randint(3, 5))
+            #     else:
+            #         break
+            # else:
+            #     save_html(self.driver.page_source, "G2_SauceLabs")
+            #     raise Exception("G2 page got Access Denied")
+
+            for refresh_attempt in range(5):
+                if not check_for_block(self.driver):
                     break
+                logger.warning(
+                    f"[G2] Access-Denied page detected on Sauce Labs "
+                    f"(refresh {refresh_attempt + 1}/5)"
+                )
+                self.driver.refresh()
+                time.sleep(randint(3, 5))
             else:
                 save_html(self.driver.page_source, "G2_SauceLabs")
-                raise Exception("G2 page got Access Denied")
+                logger.error(f"G2 {self.product} page is still Access Denied "
+                             "after 5 refreshes")
+                raise AccessDeniedError(
+                    f"G2 {self.product} page got Access Denied"
+                )
+            # --------------------------------------------------------------------
+
 
             save_html(self.driver.page_source, "G2_SauceLabs")
+
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
 
             total_words = random.choice([4, 5, 6, 9])
             first_count = random.randint(1, min(3, total_words - 2))
-            second_count = random.randint(
-                1, min(2, total_words - first_count - 1)
-            )
+            second_count = random.randint(1, min(2, total_words - first_count - 1))
             final_count = total_words - first_count - second_count
 
             self.click_one_random_show_more()
@@ -1180,9 +1209,9 @@ class G2Page:
             except Exception:
                 logger.exception("Browse g2 error")
             time.sleep(10)
-            logger.info("G2 Sauce Labs automation completed successfully")
+            logger.info(f"G2 {self.product} automation completed successfully")
         except Exception as error:
-            logger.exception(f"G2 Sauce Labs automation failed: {error}")
+            logger.exception(f"G2 {self.product} automation failed: {error}")
             raise
 
 
