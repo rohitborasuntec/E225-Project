@@ -80,7 +80,7 @@ class G2Comparison:
         )
         logger.info("Clicking comparison button (human)...")
         try:
-            self.human_simulator.mouse_click(compare_element)
+            self.human_simulator.mouse_click_after_hover(compare_element)
         except Exception:
             logger.warning("Human click failed, trying JS click.")
             self.driver.execute_script("arguments[0].click();", compare_element)
