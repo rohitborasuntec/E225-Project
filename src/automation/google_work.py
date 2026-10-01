@@ -46,13 +46,15 @@ class GoogleSearch:
                 except Exception:
                     logger.info("Google page may not have opened correctly, retrying.")
                     self.get_google(query=keyword)
+                
+                self.check_for_bot()
 
                 wait_for_element(
                     self.driver,
                     (By.XPATH, '//a[@aria-label="Go to Google Home"]'),
                     condition="visible",
                 )
-                self.check_for_bot()
+                # xpath_trans = self.change_in_eng()
 
                 xpath_trans = self.change_in_eng()
                 if xpath_trans:

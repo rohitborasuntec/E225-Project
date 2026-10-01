@@ -25,6 +25,7 @@ def check_for_block(driver):
     return False
 
 
+
 # def check_for_block(driver):
 #     """
 #     Return True if the current page looks like a G2 / Cloudflare block page.
