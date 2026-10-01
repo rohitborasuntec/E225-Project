@@ -16,6 +16,8 @@ Pass incognito=True to Browser(). When enabled we deliberately do NOT set
 --user-data-dir (a persistent profile silently overrides --incognito) and
 we do NOT pass user_data_dir to UC.
 Firefox uses -private (not --incognito).
+
+Windows / Linux / macOS are all supported.
 """
 
 from __future__ import annotations
@@ -23,8 +25,10 @@ from __future__ import annotations
 import os
 import platform
 import random
+import re
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -42,6 +46,11 @@ from selenium.webdriver.common.keys import Keys
 
 from webdriver_manager.firefox import GeckoDriverManager
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
+
+
+IS_WINDOWS = platform.system() == "Windows"
+IS_LINUX = platform.system() == "Linux"
+IS_MAC = platform.system() == "Darwin"
 
 
 STEALTH_JS = r"""
@@ -110,8 +119,7 @@ class Browser:
         browser.quit()
     """
 
-    # FIX: Opera was missing though launch() supports it
-    SUPPORTED = ["Chrome", "Brave", "Opera", "Edge","Firefox"]
+    SUPPORTED = ["Chrome", "Brave", "Opera", "Edge", "Firefox"]
 
     _WINDOW_SIZES = [
         (1366, 768),
@@ -120,6 +128,10 @@ class Browser:
         (1600, 900),
     ]
 
+    # Optional override for the Firefox install directory, used by
+    # undetected-geckodriver. If None, auto-detected per-OS.
+    FIREFOX_INSTALL_DIR: str | None = None
+
     def __init__(
         self,
         headless: bool = False,
@@ -127,14 +139,12 @@ class Browser:
         window_size: tuple[int, int] | None = None,
         user_data_dir: str | None = None,
         use_undetected_firefox: bool = True,
-        # incognito: bool = False,
+        firefox_install_dir: str | None = None,
     ):
         self.headless = headless
         self.user_agent = user_agent
-        # FIX: honour caller window_size; otherwise random. Never set to False.
         self.window_size = window_size or random.choice(self._WINDOW_SIZES)
         self.use_undetected_firefox = use_undetected_firefox
-        # self.incognito = incognito
 
         base = Path(user_data_dir or (Path.home() / ".browser_profiles"))
         base.mkdir(parents=True, exist_ok=True)
@@ -143,6 +153,9 @@ class Browser:
         self.driver = None
         self.browser_name = None
         self._opera_service = None
+
+        if firefox_install_dir:
+            type(self).FIREFOX_INSTALL_DIR = firefox_install_dir
 
     # ---------------- helpers ---------------- #
 
@@ -157,15 +170,22 @@ class Browser:
     @staticmethod
     def _find_existing(paths: list[str]) -> str | None:
         for item in paths:
-            if item and os.path.isfile(os.path.expandvars(item)):
-                return os.path.expandvars(item)
+            if not item:
+                continue
+            expanded = os.path.expandvars(item)
+            if os.path.isfile(expanded):
+                return expanded
         return None
 
     @staticmethod
     def _run_version(binary: str) -> str | None:
         try:
             result = subprocess.run(
-                [binary, "--version"], capture_output=True, text=True, timeout=5,
+                [binary, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
             )
             if result.returncode == 0:
                 return (result.stdout or result.stderr).strip()
@@ -180,7 +200,6 @@ class Browser:
         text = cls._run_version(binary)
         if not text:
             return None
-        import re
         match = re.search(r"(\d+)(?:\.\d+){1,3}", text)
         return int(match.group(1)) if match else None
 
@@ -213,17 +232,12 @@ class Browser:
         if self.user_agent:
             options.add_argument(f"--user-agent={self.user_agent}")
 
-        # FIX: incognito now controlled by self.incognito (default False).
-        # if self.incognito:
         if browser.lower() == "edge":
             options.add_argument("--inprivate")
         else:
             options.add_argument("--incognito")
         options.add_argument("--disable-session-crashed-bubble")
         options.add_argument("--disable-features=InfiniteSessionRestore")
-        # else:
-        #     # Persistent profile per browser to avoid lock conflicts.
-        #     options.add_argument(f"--user-data-dir={self._profile(browser)}")
 
     @staticmethod
     def _inject_cdp(driver) -> None:
@@ -242,61 +256,120 @@ class Browser:
                 pass
         time.sleep(random.uniform(0.4, 1.0))
 
+    @staticmethod
+    def _kill_by_name(image_name: str) -> None:
+        """Cross-platform 'kill everything named <image_name>' helper."""
+        try:
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", image_name],
+                    check=False,
+                    capture_output=True,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            else:
+                subprocess.run(
+                    ["pkill", "-f", image_name],
+                    check=False,
+                    capture_output=True,
+                )
+            print(f"Killed leftover {image_name} processes.")
+        except Exception as exc:
+            print(f"kill {image_name} error: {exc}")
+
     # ---------------- executables ---------------- #
 
     def _chrome_binary(self):
-        system = platform.system()
-        if system == "Windows":
+        if IS_WINDOWS:
             return self._find_existing([
                 os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
                 os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
                 os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
             ])
-        if system == "Darwin":
+        if IS_MAC:
             return self._find_existing([
                 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
             ])
         return self._which("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
 
     def _brave_binary(self):
-        system = platform.system()
-        if system == "Windows":
+        if IS_WINDOWS:
             return self._find_existing([
                 os.path.expandvars(r"%PROGRAMFILES%\BraveSoftware\Brave-Browser\Application\brave.exe"),
                 os.path.expandvars(r"%PROGRAMFILES(X86)%\BraveSoftware\Brave-Browser\Application\brave.exe"),
                 os.path.expandvars(r"%LOCALAPPDATA%\BraveSoftware\Brave-Browser\Application\brave.exe"),
             ])
-        if system == "Darwin":
+        if IS_MAC:
             return self._find_existing([
                 "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
             ])
         return self._which("brave-browser", "brave-browser-stable", "brave")
 
     def _opera_binary(self):
-        system = platform.system()
-        if system == "Windows":
+        if IS_WINDOWS:
             return self._find_existing([
                 os.path.expandvars(r"%LOCALAPPDATA%\Programs\Opera\opera.exe"),
                 os.path.expandvars(r"%PROGRAMFILES%\Opera\opera.exe"),
+                os.path.expandvars(r"%PROGRAMFILES(X86)%\Opera\opera.exe"),
                 os.path.expandvars(r"%PROGRAMFILES%\Opera\launcher.exe"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Programs\Opera\launcher.exe"),
             ])
-        if system == "Darwin":
+        if IS_MAC:
             return self._find_existing(["/Applications/Opera.app/Contents/MacOS/Opera"])
         return self._which("opera", "opera-stable")
 
     def _edge_binary(self):
-        system = platform.system()
-        if system == "Windows":
+        if IS_WINDOWS:
             return self._find_existing([
                 os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
                 os.path.expandvars(r"%PROGRAMFILES%\Microsoft\Edge\Application\msedge.exe"),
                 os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
             ])
-        if system == "Darwin":
+        if IS_MAC:
             return self._find_existing([
                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
             ])
         return self._which("microsoft-edge", "microsoft-edge-stable")
+
+    def _firefox_install_dir(self) -> str | None:
+        """
+        Return the *directory* that contains the Firefox binary.
+        undetected-geckodriver wants the install dir, not the exe.
+        """
+        if self.FIREFOX_INSTALL_DIR and os.path.isdir(self.FIREFOX_INSTALL_DIR):
+            return self.FIREFOX_INSTALL_DIR
+
+        candidates: list[str] = []
+        if IS_WINDOWS:
+            candidates += [
+                os.path.expandvars(r"%PROGRAMFILES%\Mozilla Firefox"),
+                os.path.expandvars(r"%PROGRAMFILES(X86)%\Mozilla Firefox"),
+                os.path.expandvars(r"%LOCALAPPDATA%\Mozilla Firefox"),
+            ]
+        elif IS_MAC:
+            candidates += ["/Applications/Firefox.app/Contents/MacOS"]
+        else:
+            candidates += [
+                "/home/suntec/firefox-mozilla",
+                "/opt/firefox",
+                "/usr/lib/firefox",
+                "/usr/lib64/firefox",
+            ]
+
+        for c in candidates:
+            exe = os.path.join(c, "firefox.exe" if IS_WINDOWS else "firefox")
+            if os.path.isfile(exe):
+                return c
+        return None
+
+    def _firefox_binary(self) -> str | None:
+        install_dir = self._firefox_install_dir()
+        if not install_dir:
+            # Last resort: whatever is on PATH
+            return self._which("firefox")
+        exe = "firefox.exe" if IS_WINDOWS else "firefox"
+        full = os.path.join(install_dir, exe)
+        return full if os.path.isfile(full) else None
 
     # ---------------- public entry ---------------- #
 
@@ -309,10 +382,7 @@ class Browser:
             "edge": self.get_edge,
         }
 
-        # IMPORTANT:
-        # Default to Chrome instead of randomly selecting a browser.
         requested = browser_name or random.choice(self.SUPPORTED)
-
         key = requested.strip().lower()
 
         if key not in mapping:
@@ -322,31 +392,19 @@ class Browser:
             )
 
         self.browser_name = key
-
-        print(
-            f"[Browser] Starting {requested}..."
-        )
+        print(f"[Browser] Starting {requested}...")
 
         try:
             self.driver = mapping[key]()
-
         except Exception as error:
-
-            print(
-                f"[Browser] Failed to start {requested}: {error}"
-            )
-
-            # Make sure a partially created driver doesn't remain.
+            print(f"[Browser] Failed to start {requested}: {error}")
             self.driver = None
             self.browser_name = None
-
             raise
 
-        print(
-            f"[Browser] {requested} started successfully."
-        )
-
+        print(f"[Browser] {requested} started successfully.")
         return self.driver, requested
+
     # ---------------- chrome / brave ---------------- #
 
     def get_chrome(self):
@@ -358,8 +416,6 @@ class Browser:
         version = self._major_version(binary)
 
         kwargs = {"options": options, "headless": self.headless, "use_subprocess": True}
-        # if not self.incognito:
-        #     kwargs["user_data_dir"] = self._profile("chrome")
         if version:
             kwargs["version_main"] = version
         if binary:
@@ -386,8 +442,6 @@ class Browser:
             "headless": self.headless,
             "use_subprocess": True,
         }
-        # if not self.incognito:
-        #     kwargs["user_data_dir"] = self._profile("brave")
         if version:
             kwargs["version_main"] = version
 
@@ -399,20 +453,27 @@ class Browser:
     # ---------------- opera ---------------- #
 
     def _opera_driver_binary(self):
-        candidates = [
-            os.environ.get("OPERADRIVER"),
-            self._which("operadriver"),
-        ]
+        candidates: list[str] = []
+        if os.environ.get("OPERADRIVER"):
+            candidates.append(os.environ["OPERADRIVER"])
+        which = self._which("operadriver", "operadriver.exe")
+        if which:
+            candidates.append(which)
+
+        # webdriver-manager cache:  ~/.wdm/drivers/operadriver/<os>/<ver>/...
         wdm_root = Path.home() / ".wdm" / "drivers" / "operadriver"
         if wdm_root.exists():
             try:
+                exe_name = "operadriver.exe" if IS_WINDOWS else "operadriver"
                 matches = sorted(
-                    (p for p in wdm_root.rglob("operadriver") if p.is_file()),
-                    key=lambda p: p.stat().st_mtime, reverse=True,
+                    (p for p in wdm_root.rglob(exe_name) if p.is_file()),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
                 )
                 candidates.extend(str(p) for p in matches)
             except OSError:
                 pass
+
         return self._find_existing(candidates)
 
     def get_opera(self):
@@ -476,238 +537,114 @@ class Browser:
     # ---------------- firefox ---------------- #
 
     @staticmethod
-    def _load_undetected_firefox():
+    def _load_undetected_firefox(firefox_install_dir: str | None):
         """
         Load undetected-geckodriver and make it recognize the
         manually installed Mozilla Firefox directory.
 
-        undetected-geckodriver 1.0.7 searches for Firefox before
-        applying options.binary_location, so we patch its runtime
-        path lookup instead of modifying site-packages.
+        Works for both the Linux and Windows config tables shipped
+        by undetected-geckodriver.
         """
         try:
-            import undetected_geckodriver.driver as ug_driver
+            import undetected_geckodriver.constants as ug_constants
             from undetected_geckodriver import Firefox as UndetectedFirefox
-
-            firefox_install_dir = "/home/suntec/firefox-mozilla"
-
-            original_get_params = ug_driver.get_platform_dependent_params
-
-            # Avoid patching the function more than once.
-            if not getattr(
-                ug_driver,
-                "_e225_firefox_path_patched",
-                False
-            ):
-
-                def patched_get_params():
-                    params = original_get_params()
-
-                    # Make a copy so we don't modify the package's
-                    # original dictionary permanently.
-                    params = dict(params)
-
-                    firefox_paths = list(
-                        params.get("firefox_paths", [])
-                    )
-
-                    if firefox_install_dir not in firefox_paths:
-                        firefox_paths.insert(
-                            0,
-                            firefox_install_dir
-                        )
-
-                    params["firefox_paths"] = firefox_paths
-
-                    return params
-
-                ug_driver.get_platform_dependent_params = (
-                    patched_get_params
-                )
-
-                ug_driver._e225_firefox_path_patched = True
-
-            print(
-                "[firefox] undetected-geckodriver loaded"
-            )
-
-            print(
-                f"[firefox] Firefox installation: "
-                f"{firefox_install_dir}"
-            )
-
-            return UndetectedFirefox
-
         except Exception as exc:
-            print(
-                f"[firefox] Could not load "
-                f"undetected-geckodriver: {exc}"
-            )
+            print(f"[firefox] Could not import undetected-geckodriver: {exc}")
             return None
+
+        try:
+            if firefox_install_dir:
+                table = ug_constants.WINDOWS if IS_WINDOWS else ug_constants.LINUX
+                # The package uses a plain dict here.
+                if isinstance(table, dict) and "firefox_paths" in table:
+                    paths = list(table["firefox_paths"])
+                    if firefox_install_dir not in paths:
+                        paths.insert(0, firefox_install_dir)
+                    table["firefox_paths"] = paths
+                elif hasattr(table, "firefox_paths"):
+                    paths = list(table.firefox_paths)
+                    if firefox_install_dir not in paths:
+                        paths.insert(0, firefox_install_dir)
+                    table.firefox_paths = paths
+
+                print(
+                    f"[firefox] undetected-geckodriver loaded "
+                    f"(install dir: {firefox_install_dir})"
+                )
+            else:
+                print("[firefox] undetected-geckodriver loaded (no path patch)")
+        except Exception as exc:
+            print(f"[firefox] Could not patch undetected-geckodriver paths: {exc}")
+
+        return UndetectedFirefox
+
     def get_firefox(self):
         profile_path = self._profile("firefox")
         options = FirefoxOptions()
 
-        # ============================================================
-        # Firefox binary
-        # ============================================================
-        firefox_binary = "/home/suntec/firefox-mozilla/firefox"
-
-        if os.path.isfile(firefox_binary):
-            options.binary_location = firefox_binary
-            print(f"[firefox] Using Firefox binary: {firefox_binary}")
-        else:
+        # ---------- Firefox binary ----------
+        firefox_binary = self._firefox_binary()
+        if not firefox_binary:
             raise FileNotFoundError(
-                f"Firefox binary not found: {firefox_binary}"
+                "Firefox was not found. Install Firefox or pass "
+                "firefox_install_dir= to Browser()."
             )
+        options.binary_location = firefox_binary
+        print(f"[firefox] Using Firefox binary: {firefox_binary}")
 
-        # ============================================================
-        # Headless
-        # ============================================================
+        # ---------- Headless ----------
         if self.headless:
             options.add_argument("-headless")
 
-        # ============================================================
-        # Window size
-        # ============================================================
+        # ---------- Window size ----------
         if self.window_size:
             w, h = self.window_size
             options.add_argument(f"--width={w}")
             options.add_argument(f"--height={h}")
 
-        # ============================================================
-        # User agent
-        # ============================================================
+        # ---------- User agent ----------
         if self.user_agent:
-            options.set_preference(
-                "general.useragent.override",
-                self.user_agent
-            )
+            options.set_preference("general.useragent.override", self.user_agent)
 
-        # ============================================================
-        # Firefox preferences
-        # ============================================================
-        options.set_preference(
-            "dom.webdriver.enabled",
-            False
-        )
+        # ---------- Preferences ----------
+        options.set_preference("dom.webdriver.enabled", False)
+        options.set_preference("useAutomationExtension", False)
+        options.set_preference("media.navigator.enabled", True)
+        options.set_preference("network.http.sendRefererHeader", 2)
+        options.set_preference("privacy.resistFingerprinting", False)
 
-        options.set_preference(
-            "useAutomationExtension",
-            False
-        )
-
-        options.set_preference(
-            "media.navigator.enabled",
-            True
-        )
-
-        options.set_preference(
-            "network.http.sendRefererHeader",
-            2
-        )
-
-        options.set_preference(
-            "privacy.resistFingerprinting",
-            False
-        )
-
-        # ============================================================
-        # Private browsing
-        # ============================================================
-        # if self.incognito:
+        # ---------- Private browsing ----------
         options.add_argument("-private")
 
-        # ============================================================
-        # Start Firefox
-        # ============================================================
-        # if self.use_undetected_firefox:
-        #     UndetectedFirefox = self._load_undetected_firefox()
-
-        #     if UndetectedFirefox is not None:
-        #         try:
-        #             print("[firefox] Starting undetected Firefox...")
-
-        #             driver = UndetectedFirefox(
-        #                 options=options
-        #             )
-
-        #             self._finalize(driver)
-        #             return driver
-
-        #         except Exception as exc:
-        #             print(
-        #                 f"[firefox] undetected-geckodriver failed; "
-        #                 f"fallback: {exc}"
-        #             )
-
+        # ---------- Try undetected-geckodriver first ----------
         if self.use_undetected_firefox:
-            UndetectedFirefox = self._load_undetected_firefox()
+            install_dir = os.path.dirname(firefox_binary)
+            UndetectedFirefox = self._load_undetected_firefox(install_dir)
 
             if UndetectedFirefox is not None:
                 try:
                     print("[firefox] Starting undetected Firefox...")
-                    print(
-                        "[firefox] Binary:",
-                        options.binary_location
-                    )
-
-                    # undetected-geckodriver 1.0.7 searches for the
-                    # Firefox installation directory itself.
-                    # Add the manually installed Mozilla Firefox location
-                    # to its Linux search paths before creating the driver.
-                    import undetected_geckodriver.constants as ug_constants
-
-                    firefox_install_dir = "/home/suntec/firefox-mozilla"
-
-                    if hasattr(ug_constants, "LINUX"):
-                        linux_config = ug_constants.LINUX
-
-                        if "firefox_paths" in linux_config:
-                            paths = linux_config["firefox_paths"]
-
-                            if firefox_install_dir not in paths:
-                                paths.insert(0, firefox_install_dir)
-
-                    driver = UndetectedFirefox(
-                        options=options
-                    )
-
+                    driver = UndetectedFirefox(options=options)
                     self._finalize(driver)
                     return driver
-
                 except Exception as exc:
                     print(
                         f"[firefox] undetected-geckodriver failed; "
                         f"fallback: {exc}"
                     )
 
-        # ============================================================
-        # Normal Selenium Firefox
-        # ============================================================
+        # ---------- Normal Selenium Firefox ----------
         print("[firefox] Starting Selenium Firefox...")
+        service = FirefoxService(GeckoDriverManager().install())
+        driver = webdriver.Firefox(service=service, options=options)
 
-        service = FirefoxService(
-            GeckoDriverManager().install()
-        )
-
-        driver = webdriver.Firefox(
-            service=service,
-            options=options
-        )
-
-        # ============================================================
-        # Hide webdriver property
-        # ============================================================
         try:
             driver.execute_script(
                 """
                 Object.defineProperty(
                     Navigator.prototype,
                     'webdriver',
-                    {
-                        get: () => undefined
-                    }
+                    { get: () => undefined }
                 );
                 """
             )
@@ -715,8 +652,8 @@ class Browser:
             pass
 
         self._finalize(driver)
-
         return driver
+
     # ---------------- human helpers ---------------- #
 
     @staticmethod
@@ -734,7 +671,8 @@ class Browser:
         for _ in range(steps):
             delta = random.randint(200, 700)
             driver.execute_script(
-                "window.scrollBy({top: arguments[0], behavior: 'smooth'});", delta,
+                "window.scrollBy({top: arguments[0], behavior: 'smooth'});",
+                delta,
             )
             time.sleep(random.uniform(0.3, 1.0))
 
@@ -747,7 +685,9 @@ class Browser:
             max_y = max(20, size["height"] - 30)
             for _ in range(moves):
                 ActionChains(driver).move_to_element_with_offset(
-                    body, random.randint(10, max_x), random.randint(10, max_y),
+                    body,
+                    random.randint(10, max_x),
+                    random.randint(10, max_y),
                 ).pause(random.uniform(0.2, 0.7)).perform()
         except Exception:
             pass
@@ -756,6 +696,7 @@ class Browser:
 
     def quit(self, browser_name: str | None = None):
         name = (browser_name or self.browser_name or "").lower()
+
         if self.driver:
             try:
                 self.driver.quit()
@@ -764,6 +705,7 @@ class Browser:
                 print(f"driver.quit() error: {exc}")
             finally:
                 self.driver = None
+
         if name == "opera" and self._opera_service is not None:
             try:
                 self._opera_service.stop()
@@ -771,12 +713,10 @@ class Browser:
                 print(f"operadriver service.stop() error: {exc}")
             finally:
                 self._opera_service = None
+
         if name == "brave":
-            try:
-                subprocess.run(["pkill", "-f", "brave"], check=False)
-                print("Killed leftover brave processes.")
-            except Exception as exc:
-                print(f"pkill brave error: {exc}")
+            # On Windows the image is brave.exe; on *nix it is brave.
+            self._kill_by_name("brave.exe" if IS_WINDOWS else "brave")
 
 
 if __name__ == "__main__":

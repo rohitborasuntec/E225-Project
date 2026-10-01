@@ -462,6 +462,11 @@ if __name__ == "__main__":
                 # tear down browser + VPN, blacklist the location, and
                 # come back here to try again with a new VPN.
                 # =========================================================
+                if Excel().check_if_completed(product, comparing_product):
+                    logger.info(f"Already Done {product} and {comparing_product}")
+                    continue 
+                
+                logger.info(f"Starting comparison for {product} and {comparing_product}")
                 pair_done = False
 
                 for pair_attempt in range(1, MAX_VPN_ATTEMPTS + 1):

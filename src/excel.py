@@ -34,22 +34,20 @@ class Excel:
         pd.DataFrame(columns=self.COLUMNS).to_excel(self.file_name, index=False)
         logger.info(f"{self.file_name} has been created")
 
-    def check_if_present(self, product, comparing_product):
+    def check_if_completed(self, product, comparing_product):
         if not os.path.exists(self.file_name):
             return False
 
         existing = pd.read_excel(self.file_name)
 
-        match = (
-            (existing["Date"].astype(str).str.strip() == str(self.date).strip())
-            & (existing["Time"].astype(str).str.strip() == str(self.period).strip())
-            & (existing["First product"].astype(str).str.strip() == str(product).strip())
-            & (existing["Second product"].astype(str).str.strip() == str(comparing_product).strip()
-            & (existing["Status"].astype(str).str.strip() == "Done")
-        ))
+        completed_data = existing[(existing["Date"] == self.date) & (existing["Time"] == self.period) & (existing["Status"] == "Done") & (existing["First product"] == product) & (existing["Second product"] == comparing_product)]
 
-        return match.any()
+        if completed_data.empty:
+            return False
 
+        return True
+
+        
     def save_excel(self, row=None, df=None):
         if row is not None:
             row = dict(row)
