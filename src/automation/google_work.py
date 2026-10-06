@@ -430,7 +430,7 @@ class GoogleSearch:
                     time.sleep(random.uniform(0.5, 1))
                     
                     self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH,"//li[contains(text(),'English (United Kingdom)')]" ))
-                    refuse_xpath = "//*[contains(text(),'Reject all')]"
+                    refuse_xpath = "//button[contains(.,'Reject all')]"
                     
                     if self.driver.find_elements(By.XPATH,refuse_xpath):
                         self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
@@ -467,7 +467,7 @@ class GoogleSearch:
                 #     )
                 #     logger.info(f"Translation done for {keyword}")
 
-                refuse_xpath = "//*[contains(text(),'Reject all')]"
+                refuse_xpath = "//button[contains(.,'Reject all')]"
                 
                 if self.driver.find_elements(By.XPATH,refuse_xpath):
                     self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
