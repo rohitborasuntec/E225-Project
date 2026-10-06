@@ -378,8 +378,12 @@ class GoogleSearch:
         False otherwise.
         """
 
-        # api_key = os.environ.get("APIKEY_2CAPTCHA")
-        api_key = "8ed5397bd9db6500a766bf0c13905453"
+        try:
+            api_key = os.environ.get("APIKEY_2CAPTCHA")
+        except Exception as exc:
+            logger.error(f"[check_for_bot] Failed to read API key: {exc}")
+            return False
+        
         captcha_xpath = (
             '//*[contains(., "Sometimes you may be asked to solve the CAPTCHA") '
             'or contains(., "unusual traffic")]'
