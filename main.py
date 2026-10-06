@@ -518,6 +518,7 @@ if __name__ == "__main__":
                     human_simulator = HumanSimulator(driver)
                     gs = GoogleSearch(driver, human_simulator)
                     gs.get_google()
+                    
                     g2_project = G2Automation(driver, human_simulator, gs)
 
                     retry_needed = False

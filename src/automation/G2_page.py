@@ -39,8 +39,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from random import randint  # FIX: randint is used by run_g2_saucelabs
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# if __package__ in (None, ""):
+#     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -841,7 +841,7 @@ class G2Page:
             if result_link is not None:
                 return result_link
             self.scroll_down()
-            time.sleep(2)
+            time.sleep(random.uniform(1, 3))
         return self.find_exact_result_link(expected_text)
 
     def switch_to_g2_page(self):
@@ -1008,7 +1008,7 @@ class G2Page:
         self.follow_clicked_link(old_url, old_handles)
         logger.info(f"Opened breadcrumb: {self.driver.current_url}")
 
-    def browse_g2_page(self, min_seconds=75, max_seconds=150):
+    def browse_g2_page(self, min_seconds=5, max_seconds=10):
         if not G2_PRODUCT_POOL.get("xpaths"):
             return self._legacy_browse(min_seconds, max_seconds)
         duration = random.uniform(min_seconds, max_seconds)
@@ -1017,7 +1017,7 @@ class G2Page:
             duration=duration, pool=G2_PRODUCT_POOL
         )
 
-    def _legacy_browse(self, min_seconds=75, max_seconds=150):
+    def _legacy_browse(self, min_seconds=45, max_seconds=55):
         duration = random.uniform(min_seconds, max_seconds)
         deadline = time.monotonic() + duration
         actions = []
@@ -1126,19 +1126,19 @@ class G2Page:
             result_url = result_link.get_attribute("href")
             self.human_simulator.mouse_click_after_hover(result_link)
 
-            try:
-                self._poll(self.switch_to_g2_page, timeout=10, poll=0.3)
-            except TimeoutError:
-                if not result_url:
-                    # breakpoint()
-                    save_html(self.driver.page_source, f"G2_{self.product}")
-                    raise RuntimeError("Sauce Labs Google result has no URL")
-                logger.warning(
-                    "Sauce Labs mouse click did not navigate; retrying the "
-                    "same Google result URL"
-                )
-                self.driver.get(result_url)
-                self._poll(self.switch_to_g2_page, timeout=20, poll=0.3)
+            # try:
+            #     self._poll(self.switch_to_g2_page, timeout=10, poll=0.3)
+            # except TimeoutError:
+            #     if not result_url:
+            #         # breakpoint()
+            #         save_html(self.driver.page_source, f"G2_{self.product}")
+            #         raise RuntimeError("Sauce Labs Google result has no URL")
+            #     logger.warning(
+            #         "Sauce Labs mouse click did not navigate; retrying the "
+            #         "same Google result URL"
+            #     )
+            #     self.driver.get(result_url)
+            #     self._poll(self.switch_to_g2_page, timeout=20, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
 
             # for i in range(5):
@@ -1190,10 +1190,10 @@ class G2Page:
                 second_count, already_selected=first_words
             )
             logger.info(f"Mouse-selected on Alternatives page: {second_words}")
-            try:
-                self.open_fifth_breadcrumb()
-            except Exception:
-                logger.error("Not Found fifth breadcrumb")
+            # try:
+            #     self.open_fifth_breadcrumb()
+            # except Exception:
+            #     logger.error("Not Found fifth breadcrumb")
             final_words = self.human_simulator.select_random_words(
                 final_count, already_selected=first_words + second_words
             )
@@ -1208,7 +1208,7 @@ class G2Page:
                 logger.info(f"Varied G2 browsing: {browsing}")
             except Exception:
                 logger.exception("Browse g2 error")
-            time.sleep(10)
+            time.sleep(random.uniform(0.5, 2.0))
             logger.info(f"G2 {self.product} automation completed successfully")
         except Exception as error:
             logger.exception(f"G2 {self.product} automation failed: {error}")

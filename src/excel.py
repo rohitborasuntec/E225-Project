@@ -19,7 +19,7 @@ class Excel:
             self.period = "Morning"
         elif 12 <= hour < 17:
             self.period = "Afternoon"
-        elif 17 <= hour < 21:
+        elif 16 <= hour < 21:
             self.period = "Evening"
         else:
             self.period = "Night"

@@ -1,8 +1,9 @@
+import re
 import time
 from faker import Faker
 from datetime import datetime, date
 from random import randint
-import random
+import random,re
 from pathlib import Path
 
 from selenium.webdriver.support.ui import WebDriverWait
@@ -96,13 +97,20 @@ def get_random_word_or_sentence_faker(option):
 def save_html(html_text, file_name="Test"):
     folder_path = Path("HTML")
     folder_path.mkdir(parents=True, exist_ok=True)
+
     stem = Path(file_name).stem
+    # Sanitize: replace Windows-illegal chars, strip trailing dots/spaces
+    stem = re.sub(r'[<>:"/\\|?*]', '_', stem).rstrip('. ')
+    if not stem:
+        stem = "output"
+    # Optional: cap length to stay under Windows MAX_PATH
+    stem = stem[:150]
+
     today = date.today().strftime("%Y-%m-%d")
     final_name = f"{stem}_{today}.html"
     file_path = folder_path / final_name
     file_path.write_text(html_text, encoding="utf-8")
     logger.info(f"--------HTML SAVED for {file_path}----------")
-
 
 # ---------------- time helpers ---------------- #
 

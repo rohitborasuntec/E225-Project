@@ -3,8 +3,8 @@ import time
 import sys
 from pathlib import Path
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# if __package__ in (None, ""):
+#     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
@@ -60,19 +60,19 @@ class G2Comparison:
             f"/../../..//*[contains(text(),'Compare Now')]//ancestor::a"
         )
         logger.info("Searching for comparison block...")
-        start_time = time.time()
-        while time.time() - start_time < 30:
-            try:
-                compare_element = self.driver.find_element(By.XPATH, compare_xpath)
-                if compare_element.is_displayed():
-                    logger.info("Comparison block found.")
-                    break
-            except Exception:
-                pass
-            self.human_simulator.scroll_page()
-            time.sleep(random.uniform(0.5, 1))
-        else:
-            logger.error("Comparison block was not found.")
+        # start_time = time.time()
+        # while time.time() - start_time < 30:
+        #     try:
+        #         compare_element = self.driver.find_element(By.XPATH, compare_xpath)
+        #         if compare_element.is_displayed():
+        #             logger.info("Comparison block found.")
+        #             break
+        #     except Exception:
+        #         pass
+        #     self.human_simulator.scroll_page()
+        #     time.sleep(random.uniform(0.5, 1))
+        # else:
+        #     logger.error("Comparison block was not found.")
 
         compare_element = wait_for_element(
             self.driver, (By.XPATH, compare_xpath),
@@ -80,6 +80,7 @@ class G2Comparison:
         )
         logger.info("Clicking comparison button (human)...")
         try:
+            self.human_simulator.bring_element_into_view_with_wheel(compare_element)
             self.human_simulator.mouse_click_after_hover(compare_element)
         except Exception:
             logger.warning("Human click failed, trying JS click.")
@@ -91,7 +92,8 @@ class G2Comparison:
     # ==================================================================
     # BROWSE — delegates to HumanSimulator with the pool
     # ==================================================================
-    def browse_comparison_page(self, duration=60):
+    def browse_comparison_page(self, min_seconds=16, max_seconds=28):
+        duration = random.uniform(min_seconds, max_seconds)
         self.human_simulator.browse_page_randomly(
             duration=duration,
             pool=G2_COMPARISON_POOL,
@@ -125,7 +127,8 @@ class G2Comparison:
             raise AccessDeniedError("G2 Comparison page got Access Denied")
         # --------------------------------------------------------------------
 
-        self.browse_comparison_page(duration=60)
+        self.browse_comparison_page()
+
         logger.info("Comparison page browsing completed.")
 
         logger.info("Searching for footer link...")
@@ -157,7 +160,7 @@ class G2Comparison:
         time.sleep(random.uniform(3, 5))
         logger.info("New page opened.")
 
-        self.browse_comparison_page(duration=5)
+        self.browse_comparison_page(min_seconds=3, max_seconds=5)
         logger.info("Second page browsing completed.")
         logger.info("Complete Sauce Labs flow finished.")
 

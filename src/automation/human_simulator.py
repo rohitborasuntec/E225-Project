@@ -34,7 +34,7 @@ GLOBAL_PACE_MULTIPLIER = 1.35
 
 
 class HumanSimulator:
-    def __init__(self, driver, use_native_cursor=True, verbose=False):
+    def __init__(self, driver, use_native_cursor=False, verbose=False):
         """
         use_native_cursor: if True, drives the REAL OS mouse cursor via
         pyautogui (visible on screen). Requires pyautogui + a working
@@ -47,7 +47,7 @@ class HumanSimulator:
         self.driver = driver
         self.current_x = 0
         self.current_y = 0
-        self.use_native_cursor = False
+        self.use_native_cursor = use_native_cursor
         self.pyautogui = None
         self.verbose = verbose
         self._recent_signatures = []
