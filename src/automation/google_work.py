@@ -421,6 +421,20 @@ class GoogleSearch:
                     (By.XPATH, '//*[@aria-label="Google"]'),
                     condition="visible",
                 )
+
+                pop_up = self.driver.find_elements(By.XPATH, '//button[@aria-haspopup="true"]')
+
+                if pop_up:
+                    self.human_simulator.mouse_click_after_hover(pop_up[0])
+                    logger.info(f"Pop up closed for {keyword}")
+                    time.sleep(random.uniform(0.5, 1))
+                    
+                    self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH,"//li[contains(text(),'English (United Kingdom)')]" ))
+                    refuse_xpath = "//*[contains(text(),'Reject all')]"
+                    
+                    if self.driver.find_elements(By.XPATH,refuse_xpath):
+                        self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
+                        logger.info(f"Reject All done")
                 
                 try:
                     self.human_simulator.input_search_query(query,suggestion=sug)

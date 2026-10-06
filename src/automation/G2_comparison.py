@@ -92,7 +92,7 @@ class G2Comparison:
     # ==================================================================
     # BROWSE — delegates to HumanSimulator with the pool
     # ==================================================================
-    def browse_comparison_page(self, min_seconds=16, max_seconds=28):
+    def browse_comparison_page(self, min_seconds=21, max_seconds=33):
         duration = random.uniform(min_seconds, max_seconds)
         self.human_simulator.browse_page_randomly(
             duration=duration,
