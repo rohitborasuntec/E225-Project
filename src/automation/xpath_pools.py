@@ -304,9 +304,64 @@ GOOGLE_RESULTS_POOL = {
 }
 
 
+# ======================================================================
+# BROWSERSTACK WEBSITE HOME PAGE
+# ======================================================================
+BROWSERSTACK_HOME_POOL = {
+    "xpaths": {
+        "product_headings": [
+            '//main//h1',
+            '//main//h2',
+            '//main//h3',
+        ],
+        "review_body": [
+            '//main//p[string-length(normalize-space()) >= 45]',
+            '//main//blockquote[string-length(normalize-space()) >= 30]',
+        ],
+        "feature_cards": [
+            '//main//section[.//h2 or .//h3]',
+            '//*[self::article or @role="article"]',
+        ],
+        "images": [
+            '//main//img[@src and not(contains(@src,"logo"))]',
+        ],
+        "cta_buttons": [
+            '//main//a[normalize-space()="Learn more"]',
+            '//main//a[contains(normalize-space(),"Explore")]',
+            '//main//a[contains(normalize-space(),"Read their story")]',
+            '//main//button[normalize-space()]',
+        ],
+        "headings": [
+            '//footer//h2 | //footer//h3 | //footer//h4',
+        ],
+    },
+    "weights": {
+        "product_headings": 5,
+        "review_body": 6,
+        "feature_cards": 4,
+        "images": 3,
+        "cta_buttons": 2,
+        "headings": 2,
+    },
+    # Homepage CTAs can open signup or sales forms, so the initial flow only
+    # hovers and reads them. Product-specific click flows can opt in later.
+    "safe_click": set(),
+    "dwell": {
+        "product_headings": (1.5, 3.0),
+        "review_body": (2.0, 4.0),
+        "feature_cards": (2.0, 4.0),
+        "images": (1.5, 3.0),
+        "cta_buttons": (1.0, 2.0),
+        "headings": (1.0, 2.0),
+    },
+    "default_dwell": (1.5, 3.0),
+}
+
+
 # Registry — handy if you want to look up by name
 ALL_POOLS = {
     "g2_comparison": G2_COMPARISON_POOL,
     "g2_product":    G2_PRODUCT_POOL,
     "google_results": GOOGLE_RESULTS_POOL,
+    "browserstack_home": BROWSERSTACK_HOME_POOL,
 }
