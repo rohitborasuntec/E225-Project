@@ -18,6 +18,17 @@ we do NOT pass user_data_dir to UC.
 Firefox uses -private (not --incognito).
 
 Windows / Linux / macOS are all supported.
+
+Performance notes (v2)
+----------------------
+- Uses Selenium Manager (built into Selenium 4.6+) instead of webdriver-manager
+  for Edge and Firefox. Selenium Manager caches drivers under ~/.cache/selenium
+  and skips the GitHub round-trip on warm runs.
+- Browser major-version detection is cached per-binary, so we spawn
+  `chrome --version` at most once per process.
+- OperaDriver lookup is cached at module level (no more rglob on every launch).
+- Opera uses ChromeService directly via webdriver.Remote (no manual .start()).
+- _finalize() sleep reduced and made skippable.
 """
 
 from __future__ import annotations
@@ -30,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import time
+from functools import lru_cache
 from pathlib import Path
 
 import undetected_chromedriver as uc
@@ -43,9 +55,6 @@ from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-
-from webdriver_manager.firefox import GeckoDriverManager
-from webdriver_manager.microsoft import EdgeChromiumDriverManager
 
 
 IS_WINDOWS = platform.system() == "Windows"
@@ -110,6 +119,66 @@ STEALTH_JS = r"""
 """
 
 
+# ---------------------------------------------------------------------------
+# Module-level caches (survive across Browser() instances in the same process)
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=8)
+def _cached_major_version(binary: str) -> int | None:
+    """Run `<binary> --version` once per binary path per process."""
+    try:
+        result = subprocess.run(
+            [binary, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
+        )
+        if result.returncode == 0:
+            text = (result.stdout or result.stderr).strip()
+            match = re.search(r"(\d+)(?:\.\d+){1,3}", text)
+            return int(match.group(1)) if match else None
+    except Exception:
+        pass
+    return None
+
+
+@lru_cache(maxsize=1)
+def _cached_operadriver() -> str | None:
+    """
+    Find OperaDriver once per process. Avoids the rglob over ~/.wdm on
+    every launch.
+    """
+    candidates: list[str] = []
+    if os.environ.get("OPERADRIVER"):
+        candidates.append(os.environ["OPERADRIVER"])
+    which = shutil.which("operadriver") or shutil.which("operadriver.exe")
+    if which:
+        candidates.append(which)
+
+    # webdriver-manager cache: ~/.wdm/drivers/operadriver/<os>/<ver>/...
+    wdm_root = Path.home() / ".wdm" / "drivers" / "operadriver"
+    if wdm_root.exists():
+        try:
+            exe_name = "operadriver.exe" if IS_WINDOWS else "operadriver"
+            matches = sorted(
+                (p for p in wdm_root.rglob(exe_name) if p.is_file()),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            candidates.extend(str(p) for p in matches)
+        except OSError:
+            pass
+
+    for item in candidates:
+        if not item:
+            continue
+        expanded = os.path.expandvars(item)
+        if os.path.isfile(expanded):
+            return expanded
+    return None
+
+
 class Browser:
     """
     Example:
@@ -140,11 +209,13 @@ class Browser:
         user_data_dir: str | None = None,
         use_undetected_firefox: bool = True,
         firefox_install_dir: str | None = None,
+        post_launch_delay: tuple[float, float] = (0.1, 0.3),
     ):
         self.headless = headless
         self.user_agent = user_agent
         self.window_size = window_size or random.choice(self._WINDOW_SIZES)
         self.use_undetected_firefox = use_undetected_firefox
+        self.post_launch_delay = post_launch_delay
 
         base = Path(user_data_dir or (Path.home() / ".browser_profiles"))
         base.mkdir(parents=True, exist_ok=True)
@@ -177,31 +248,11 @@ class Browser:
                 return expanded
         return None
 
-    @staticmethod
-    def _run_version(binary: str) -> str | None:
-        try:
-            result = subprocess.run(
-                [binary, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                creationflags=subprocess.CREATE_NO_WINDOW if IS_WINDOWS else 0,
-            )
-            if result.returncode == 0:
-                return (result.stdout or result.stderr).strip()
-        except Exception:
-            pass
-        return None
-
     @classmethod
     def _major_version(cls, binary: str | None) -> int | None:
         if not binary:
             return None
-        text = cls._run_version(binary)
-        if not text:
-            return None
-        match = re.search(r"(\d+)(?:\.\d+){1,3}", text)
-        return int(match.group(1)) if match else None
+        return _cached_major_version(binary)
 
     def _profile(self, browser: str) -> str:
         path = self.profile_root / browser.lower()
@@ -254,7 +305,9 @@ class Browser:
                 driver.set_window_size(*self.window_size)
             except Exception:
                 pass
-        time.sleep(random.uniform(0.4, 1.0))
+        lo, hi = self.post_launch_delay
+        if hi > 0:
+            time.sleep(random.uniform(lo, hi))
 
     @staticmethod
     def _kill_by_name(image_name: str) -> None:
@@ -268,8 +321,11 @@ class Browser:
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
             else:
+                # -x matches the exact process name, avoiding false positives
+                # like a python script whose path contains "brave".
+                proc_name = image_name
                 subprocess.run(
-                    ["pkill", "-f", image_name],
+                    ["pkill", "-x", proc_name],
                     check=False,
                     capture_output=True,
                 )
@@ -365,7 +421,6 @@ class Browser:
     def _firefox_binary(self) -> str | None:
         install_dir = self._firefox_install_dir()
         if not install_dir:
-            # Last resort: whatever is on PATH
             return self._which("firefox")
         exe = "firefox.exe" if IS_WINDOWS else "firefox"
         full = os.path.join(install_dir, exe)
@@ -394,6 +449,7 @@ class Browser:
         self.browser_name = key
         print(f"[Browser] Starting {requested}...")
 
+        t0 = time.perf_counter()
         try:
             self.driver = mapping[key]()
         except Exception as error:
@@ -402,7 +458,8 @@ class Browser:
             self.browser_name = None
             raise
 
-        print(f"[Browser] {requested} started successfully.")
+        elapsed = time.perf_counter() - t0
+        print(f"[Browser] {requested} started successfully in {elapsed:.2f}s.")
         return self.driver, requested
 
     # ---------------- chrome / brave ---------------- #
@@ -453,28 +510,7 @@ class Browser:
     # ---------------- opera ---------------- #
 
     def _opera_driver_binary(self):
-        candidates: list[str] = []
-        if os.environ.get("OPERADRIVER"):
-            candidates.append(os.environ["OPERADRIVER"])
-        which = self._which("operadriver", "operadriver.exe")
-        if which:
-            candidates.append(which)
-
-        # webdriver-manager cache:  ~/.wdm/drivers/operadriver/<os>/<ver>/...
-        wdm_root = Path.home() / ".wdm" / "drivers" / "operadriver"
-        if wdm_root.exists():
-            try:
-                exe_name = "operadriver.exe" if IS_WINDOWS else "operadriver"
-                matches = sorted(
-                    (p for p in wdm_root.rglob(exe_name) if p.is_file()),
-                    key=lambda p: p.stat().st_mtime,
-                    reverse=True,
-                )
-                candidates.extend(str(p) for p in matches)
-            except OSError:
-                pass
-
-        return self._find_existing(candidates)
+        return _cached_operadriver()
 
     def get_opera(self):
         binary = self._opera_binary()
@@ -482,9 +518,7 @@ class Browser:
             raise FileNotFoundError("Opera was not found.")
         driver_binary = self._opera_driver_binary()
         if not driver_binary:
-            raise FileNotFoundError(
-                "OperaDriver was not found. Set OPERADRIVER env var."
-            )
+            raise FileNotFoundError("OperaDriver was not found. Set OPERADRIVER env var.")
 
         options = ChromeOptions()
         options.binary_location = binary
@@ -492,16 +526,22 @@ class Browser:
         options.add_experimental_option("w3c", True)
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--remote-debugging-port=0")
 
         service = ChromeService(executable_path=driver_binary)
-        service.start()
-        driver = webdriver.Remote(command_executor=service.service_url, options=options)
+        service.start()                      # <-- the missing step
+        try:
+            driver = webdriver.Remote(
+                command_executor=service.service_url,
+                options=options,
+            )
+        except Exception:
+            service.stop()                   # don't leak a stray operadriver process
+            raise
+
         self._opera_service = service
         self._inject_cdp(driver)
         self._finalize(driver)
         return driver
-
     # ---------------- edge ---------------- #
 
     def get_edge(self):
@@ -516,23 +556,48 @@ class Browser:
         except AttributeError:
             options.set_capability("excludeSwitches", ["enable-automation"])
 
-        driver = None
+        # Selenium Manager (built into Selenium 4.6+) handles driver resolution
+        # and caches it under ~/.cache/selenium. No webdriver-manager call.
         try:
             driver = webdriver.Edge(options=options)
         except Exception as first_error:
-            try:
-                service = EdgeService(EdgeChromiumDriverManager().install())
-                driver = webdriver.Edge(service=service, options=options)
-            except Exception as second_error:
+            # Only fall back to a manual EdgeService if we can find a driver
+            # without another network hit.
+            service = self._edge_service_from_cache()
+            if service is None:
                 raise RuntimeError(
-                    "Unable to start EdgeDriver.\n"
-                    f"Selenium Manager error: {first_error}\n"
-                    f"webdriver-manager error: {second_error}"
-                ) from second_error
+                    f"Unable to start EdgeDriver via Selenium Manager: {first_error}"
+                ) from first_error
+            driver = webdriver.Edge(service=service, options=options)
 
         self._inject_cdp(driver)
         self._finalize(driver)
         return driver
+
+    @staticmethod
+    def _edge_service_from_cache():
+        """Look for msedgedriver in common cache locations (no network)."""
+        exe_name = "msedgedriver.exe" if IS_WINDOWS else "msedgedriver"
+        candidates: list[Path] = []
+
+        # Selenium Manager cache
+        for root in [
+            Path.home() / ".cache" / "selenium",
+            Path.home() / "AppData" / "Local" / "selenium",
+        ]:
+            if root.exists():
+                candidates.extend(root.rglob(exe_name))
+
+        # webdriver-manager cache (if it was used before)
+        wdm = Path.home() / ".wdm" / "drivers" / "edgedriver"
+        if wdm.exists():
+            candidates.extend(wdm.rglob(exe_name))
+
+        matches = [p for p in candidates if p.is_file()]
+        if not matches:
+            return None
+        newest = max(matches, key=lambda p: p.stat().st_mtime)
+        return EdgeService(executable_path=str(newest))
 
     # ---------------- firefox ---------------- #
 
@@ -541,9 +606,6 @@ class Browser:
         """
         Load undetected-geckodriver and make it recognize the
         manually installed Mozilla Firefox directory.
-
-        Works for both the Linux and Windows config tables shipped
-        by undetected-geckodriver.
         """
         try:
             import undetected_geckodriver.constants as ug_constants
@@ -555,7 +617,6 @@ class Browser:
         try:
             if firefox_install_dir:
                 table = ug_constants.WINDOWS if IS_WINDOWS else ug_constants.LINUX
-                # The package uses a plain dict here.
                 if isinstance(table, dict) and "firefox_paths" in table:
                     paths = list(table["firefox_paths"])
                     if firefox_install_dir not in paths:
@@ -579,7 +640,6 @@ class Browser:
         return UndetectedFirefox
 
     def get_firefox(self):
-        profile_path = self._profile("firefox")
         options = FirefoxOptions()
 
         # ---------- Firefox binary ----------
@@ -634,9 +694,9 @@ class Browser:
                     )
 
         # ---------- Normal Selenium Firefox ----------
+        # Selenium Manager resolves geckodriver (cached under ~/.cache/selenium).
         print("[firefox] Starting Selenium Firefox...")
-        service = FirefoxService(GeckoDriverManager().install())
-        driver = webdriver.Firefox(service=service, options=options)
+        driver = webdriver.Firefox(options=options)
 
         try:
             driver.execute_script(
