@@ -13,6 +13,7 @@ from src.automation.driver import Browser
 from src.automation.human_simulator import HumanSimulator
 from src.automation.xpath_pools import BROWSERSTACK_HOME_POOL
 from src.commons import save_html
+from src.excel import SponsoredResultTracker
 from src.logging import logger
 
 
@@ -20,6 +21,10 @@ class BrowserStackPage:
     """Explore BrowserStack.com using shared HumanSimulator behavior."""
 
     url = "https://www.browserstack.com/"
+    google_url = "https://www.google.com/"
+    search_query = "browserstack"
+    sponsored_container_xpath = '//*[@id="tadsb"]'
+    sponsored_requested_xpath = '//*[@id="tadsb"]/div[5]'
     cookie_button_xpaths = (
         '//*[@id="onetrust-accept-btn-handler"]',
         '//button[contains(translate(normalize-space(.), '
@@ -36,9 +41,70 @@ class BrowserStackPage:
         '//*[@id="post-26"]/div/div[8]/div/div/div/section',
     )
 
-    def __init__(self, driver, human_simulator):
+    def __init__(self, driver, human_simulator, sponsored_tracker=None):
         self.driver = driver
         self.human_simulator = human_simulator
+        self.sponsored_tracker = sponsored_tracker or SponsoredResultTracker()
+
+    def inspect_google_sponsored_results(self):
+        """Record a BrowserStack sponsored result without clicking the ad."""
+        logger.info("Opening Google to inspect sponsored results for: %s", self.search_query)
+        self.driver.get(self.google_url)
+        WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
+            EC.presence_of_element_located((By.NAME, "q"))
+        )
+        self.human_simulator.input_search_query(
+            self.search_query,
+            suggestion=False,
+        )
+
+        WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
+            lambda driver: (
+                "/search" in driver.current_url
+                or "/sorry" in driver.current_url
+                or bool(driver.find_elements(By.ID, "tadsb"))
+            )
+        )
+        if "/sorry" in self.driver.current_url:
+            logger.warning(
+                "Google CAPTCHA detected; sponsored inspection skipped and no bypass attempted"
+            )
+            return False
+
+        candidates = self.driver.find_elements(By.XPATH, self.sponsored_requested_xpath)
+        candidates.extend(
+            self.driver.find_elements(
+                By.XPATH,
+                f'{self.sponsored_container_xpath}/*[not(self::script)]',
+            )
+        )
+        logger.info("Google sponsored candidates found: %s", len(candidates))
+
+        seen_ids = set()
+        for candidate in candidates:
+            try:
+                candidate_id = candidate.id
+                if candidate_id in seen_ids or not candidate.is_displayed():
+                    continue
+                seen_ids.add(candidate_id)
+                content = " ".join((candidate.text or "").split())
+                links = candidate.find_elements(By.CSS_SELECTOR, "a[href]")
+                hrefs = " ".join(link.get_attribute("href") or "" for link in links)
+                if "browserstack" not in f"{content} {hrefs}".casefold():
+                    continue
+
+                count = self.sponsored_tracker.record_seen("BrowserStack")
+                logger.info(
+                    "BrowserStack found in sponsored results; seen count is now %s. "
+                    "Sponsored result was not clicked",
+                    count,
+                )
+                return True
+            except Exception as error:
+                logger.warning("Could not inspect one sponsored candidate: %s", error)
+
+        logger.info("BrowserStack was not found in the visible sponsored results")
+        return False
 
     def wait_until_ready(self):
         WebDriverWait(self.driver, 30, poll_frequency=0.25).until(
@@ -218,11 +284,19 @@ class BrowserStackPage:
         logger.info("Selected BrowserStack website text with fallback: %s", selected)
         return selected
 
-    def run(self, min_seconds=20, max_seconds=40):
+    def run(self, min_seconds=20, max_seconds=40, inspect_sponsored=True):
         if min_seconds > max_seconds:
             min_seconds, max_seconds = max_seconds, min_seconds
 
         logger.info("BrowserStack website automation started")
+        if inspect_sponsored:
+            try:
+                self.inspect_google_sponsored_results()
+            except Exception as error:
+                logger.warning(
+                    "Sponsored-result inspection could not complete; continuing safely: %s",
+                    error,
+                )
         logger.info("Opening BrowserStack directly to avoid search CAPTCHA: %s", self.url)
         self.driver.get(self.url)
         self.wait_until_ready()
@@ -259,7 +333,12 @@ class BrowserStackPage:
         return summary
 
 
-def run(min_seconds=20, max_seconds=40, browser_name="Chrome"):
+def run(
+    min_seconds=20,
+    max_seconds=40,
+    browser_name="Chrome",
+    inspect_sponsored=True,
+):
     max_browser_attempts = 3
     for attempt in range(1, max_browser_attempts + 1):
         # Avoid a second SET_WINDOW_RECT command immediately after Chrome
@@ -294,6 +373,7 @@ def run(min_seconds=20, max_seconds=40, browser_name="Chrome"):
             return BrowserStackPage(driver, human_simulator).run(
                 min_seconds=min_seconds,
                 max_seconds=max_seconds,
+                inspect_sponsored=inspect_sponsored,
             )
         except NoSuchWindowException as error:
             if attempt >= max_browser_attempts:
@@ -312,7 +392,8 @@ def run(min_seconds=20, max_seconds=40, browser_name="Chrome"):
             raise
         finally:
             try:
-                manager.quit()
+                # manager.quit()
+                pass
             except Exception as close_error:
                 logger.warning("Browser cleanup skipped: %s", close_error)
             logger.info("BrowserStack website browser session closed")
@@ -325,9 +406,15 @@ if __name__ == "__main__":
     parser.add_argument("--min-seconds", type=float, default=20)
     parser.add_argument("--max-seconds", type=float, default=40)
     parser.add_argument("--browser", default="Chrome")
+    parser.add_argument(
+        "--skip-sponsored-check",
+        action="store_true",
+        help="Open BrowserStack directly without inspecting Google sponsored results",
+    )
     args = parser.parse_args()
     run(
         min_seconds=args.min_seconds,
         max_seconds=args.max_seconds,
         browser_name=args.browser,
+        inspect_sponsored=not args.skip_sponsored_check,
     )
