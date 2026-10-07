@@ -26,7 +26,7 @@ class G2Comparison:
     # OPEN G2 COMPARE PAGE
     # ==================================================================
     def open_g2_compare_page(self):
-        save_html(self.driver.page_source, "G2_Comparison_Page")
+        save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}.html")
 
         # Cookie banner
         try:
@@ -79,15 +79,29 @@ class G2Comparison:
             condition="clickable", timeout=10, poll=0.5,
         )
         logger.info("Clicking comparison button (human)...")
+
+        if self.driver.find_elements(By.XPATH, "//button[contains(.,'Reject Non-Essential')]"):
+            reject_button = self.driver.find_element(By.XPATH, "//button[contains(.,'Reject Non-Essential')]")
+            try:
+                self.human_simulator.mouse_click(reject_button)
+                logger.info("Clicked 'Reject Non-Essential' button.")
+            except Exception:
+                reject_button.click()
+                logger.info("Clicked 'Reject Non-Essential' button (fallback).")
+            time.sleep(random.uniform(0.8, 2.6))
+
+        
         try:
+            # self.human_simulator.scroll_to_element_human(compare_element,align="end")
             self.human_simulator.bring_element_into_view_with_wheel(compare_element)
             self.human_simulator.mouse_click_after_hover(compare_element)
-        except Exception:
-            logger.warning("Human click failed, trying JS click.")
+        except Exception as e:
+            logger.warning("Human click failed, trying JS click.",e )
             self.driver.execute_script("arguments[0].click();", compare_element)
+            save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}_after_click.html")
 
         logger.info("Comparison button clicked.")
-        time.sleep(random.uniform(3, 5))
+        time.sleep(random.uniform(0.5, 3))
 
     # ==================================================================
     # BROWSE — delegates to HumanSimulator with the pool
@@ -139,6 +153,7 @@ class G2Comparison:
                 condition="presence", timeout=15, poll=0.5,
             )
             logger.info("Footer link found.")
+
             try:
                 self.human_simulator.bring_element_into_view_with_wheel(footer_link)
             except Exception:
@@ -155,6 +170,7 @@ class G2Comparison:
             logger.info("Footer link clicked successfully.")
         except Exception as error:
             logger.error(f"Footer link click failed: {error}")
+            save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}_footer_click_failed.html")         
             return
 
         time.sleep(random.uniform(3, 5))
@@ -163,6 +179,7 @@ class G2Comparison:
         self.browse_comparison_page(min_seconds=3, max_seconds=5)
         logger.info("Second page browsing completed.")
         logger.info("Complete Sauce Labs flow finished.")
+
 
     def run_g2_comparisons(self):
         """
@@ -178,6 +195,7 @@ class G2Comparison:
             raise                                   # <-- let caller retry
         except Exception as error:
             logger.error(f"ERROR OCCURRED: {error}")
+            raise  # <-- let caller retry, but log the error first
 
 
 if __name__ == "__main__":
@@ -187,10 +205,10 @@ if __name__ == "__main__":
         "BrowserStack": "https://www.g2.com/products/browserstack/reviews",
         "SauceLabs": "https://www.g2.com/products/sauce-labs/reviews",
     }
-    product = "BrowserStack"
+    product = "SauceLabs"
     driver.get(url_dict[product])
 
-    comparing_product = "Qase"
+    comparing_product = "TestComplete"
     human_simulator = HumanSimulator(driver, use_native_cursor=False)
 
     try:

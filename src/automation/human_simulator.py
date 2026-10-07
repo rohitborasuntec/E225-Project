@@ -707,9 +707,197 @@ class HumanSimulator:
     # ==================================================================
     # PAGE EXPLORATION HELPERS
     # ==================================================================
-    def bring_element_into_view_with_wheel(self, element):
-        """Scroll element into view (JS scrollIntoView is fine here)."""
-        self._scroll_element_into_view(element)
+    # def bring_element_into_view_with_wheel(self, element):
+    #     """Scroll element into view (JS scrollIntoView is fine here)."""
+    #     self._scroll_element_into_view(element)
+
+    def bring_element_into_view_with_wheel(self, element, align="center",
+                                            max_iterations=6, settle=True):
+        """
+        Bring `element` into view by driving the mouse wheel in human-like
+        chunks (variable speed, jitter, occasional backtrack), instead of
+        teleporting with scrollIntoView.
+
+        Falls back to a single JS scrollIntoView only if wheel input is
+        unavailable in both native and synthetic modes.
+
+        align: "start" | "center" | "end"  -- where in the viewport to land.
+        """
+        if element is None:
+            return False
+
+        # Where do we want the element to sit vertically in the viewport?
+        if align == "start":
+            target_ratio = random.uniform(0.15, 0.28)
+        elif align == "end":
+            target_ratio = random.uniform(0.68, 0.82)
+        else:  # center
+            target_ratio = random.uniform(0.40, 0.58)
+
+        for iteration in range(max_iterations):
+            rect = self._element_rect(element)  # [top, bottom, height]
+            if rect is None:
+                return False
+            top, bottom, height = rect
+            _, vh, _ = self._viewport_state()
+
+            # Already comfortably in view? Add a small pause so it doesn't
+            # feel instantaneous, then bail out.
+            if (top >= 60 and bottom <= vh - 60):
+                if settle:
+                    time.sleep(self._gauss(0.25, 0.08, 0.1, 0.5))
+                return True
+
+            # Compute the delta needed to land the element at target_ratio.
+            target_top = vh * target_ratio
+            # Aim for the element's vertical centre at the target line.
+            element_center = top + height / 2.0
+            delta = element_center - target_top        # + = need to scroll down
+
+            # If the element is far away, cap per-iteration distance so the
+            # wheel motion stays human (roughly one viewport at a time).
+            max_step = vh * random.uniform(0.75, 1.05)
+            if abs(delta) > max_step:
+                delta = math.copysign(max_step, delta)
+
+            # --- break the delta into small, uneven wheel chunks -----------
+            chunks = self._plan_wheel_chunks(abs(delta), vh)
+            direction = "down" if delta > 0 else "up"
+
+            # Small chance to overshoot then correct — very human.
+            overshoot = 0
+            if random.random() < 0.22 and abs(delta) > vh * 0.4:
+                overshoot = int(abs(self._gauss(vh * 0.06, vh * 0.03,
+                                                0, vh * 0.15)))
+
+            for chunk in chunks:
+                step = chunk + (overshoot if chunks.index(chunk) == len(chunks) - 1
+                                else 0)
+                self._wheel_scroll(step, direction)
+                # Per-chunk delay: shorter for small chunks, longer for big.
+                base = 0.18 + (step / max(vh, 1)) * 0.35
+                time.sleep(self._gauss(base * GLOBAL_PACE_MULTIPLIER,
+                                        base * 0.25,
+                                        0.06, 1.2))
+                # Occasional micro-pause, like a reader scanning.
+                if random.random() < 0.18:
+                    time.sleep(self._gauss(0.4, 0.15, 0.15, 0.9))
+
+            # Undo any overshoot with a short reversed wheel burst.
+            if overshoot:
+                back = int(overshoot * random.uniform(0.6, 1.0))
+                self._wheel_scroll(back, "up" if direction == "down" else "down")
+                time.sleep(self._gauss(0.25, 0.08, 0.1, 0.5))
+
+            # Give smooth-scrolling pages a moment to actually settle before
+            # we re-measure. Re-measure loop handles pages that keep loading.
+            if settle:
+                time.sleep(self._gauss(0.35, 0.12, 0.15, 0.7))
+
+        # Last-resort: we tried hard, still not settled — do a gentle
+        # JS scroll (still with instant behavior disabled where possible)
+        # so callers don't get stuck forever.
+        logger.debug(
+            "bring_element_into_view_with_wheel: giving up after "
+            f"{max_iterations} wheel iterations; using JS fallback."
+        )
+        try:
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center', inline:'nearest', "
+                "behavior:'smooth'});",
+                element,
+            )
+            if settle:
+                time.sleep(self._gauss(0.3, 0.1, 0.1, 0.6))
+        except Exception:
+            pass
+        return False
+
+
+    # ----------------------------------------------------------------------
+    # Wheel helpers
+    # ----------------------------------------------------------------------
+    def _wheel_scroll(self, distance, direction):
+        """
+        Emit one burst of wheel scrolling of `distance` px in `direction`.
+        Uses the native cursor when available, else dispatches a wheel event
+        on the document so the page still sees realistic input.
+        """
+        if distance <= 0:
+            return
+        signed = -distance if direction == "down" else distance
+        # pyautogui.scroll: + = up, - = down.
+
+        if self.use_native_cursor and self.pyautogui is not None:
+            try:
+                # Park the cursor somewhere natural first — wheels don't fire
+                # from nowhere. Reuse last known position, nudged slightly.
+                jitter_x = self._gauss(0, 6, -15, 15)
+                jitter_y = self._gauss(0, 6, -15, 15)
+                sx, sy = self._apply_screen_offset(
+                    self.current_x + jitter_x,
+                    self.current_y + jitter_y,
+                )
+                self.pyautogui.moveTo(sx, sy, duration=0)
+                self.pyautogui.scroll(signed)
+                self.current_x += jitter_x
+                self.current_y += jitter_y
+                return
+            except Exception as e:
+                logger.debug(f"pyautogui.scroll failed: {e}; using JS wheel event")
+
+        # Synthetic wheel event — many modern sites read wheel events even
+        # when the browser is headless / cursor is not native.
+        try:
+            self.driver.execute_script(
+                "window.dispatchEvent(new WheelEvent('wheel', {"
+                "  deltaY: arguments[0], deltaMode: 0, bubbles: true, cancelable: true"
+                "}));",
+                signed,
+            )
+        except Exception:
+            # Absolute fallback: programmatic scrollBy.
+            self.driver.execute_script(
+                "window.scrollBy({top: arguments[0], left: 0, behavior: 'smooth'});",
+                -signed if direction == "down" else -signed,
+            )
+
+
+    def _plan_wheel_chunks(self, total_distance, viewport_height):
+        """
+        Split a total wheel distance into several small, uneven chunks that
+        roughly follow a human ramp-up / ramp-down profile.
+        """
+        if total_distance <= 0:
+            return []
+
+        # Target chunk size scales with viewport but stays modest.
+        base_chunk = max(40, min(viewport_height * 0.18, 140))
+        n = max(2, int(total_distance / base_chunk))
+        n = min(n, 10)   # never too many tiny bursts — looks robotic
+
+        # Build weights from a smooth bell-ish curve so middle chunks are
+        # larger and the ends are smaller (like a real wrist flick).
+        weights = []
+        for i in range(n):
+            x = (i + 0.5) / n
+            weights.append(math.sin(math.pi * x) ** 0.7 + 0.35)
+        w_sum = sum(weights)
+
+        chunks = []
+        remaining = total_distance
+        for i, w in enumerate(weights):
+            if i == n - 1:
+                chunk = remaining
+            else:
+                chunk = int(total_distance * w / w_sum)
+                chunk = max(15, min(chunk, remaining - 15 * (n - i - 1)))
+            chunks.append(chunk)
+            remaining -= chunk
+            if remaining <= 0:
+                break
+        return chunks
+
 
     def mouse_click_after_hover(self, element):
         """Click an element that was already hovered. Uses native click

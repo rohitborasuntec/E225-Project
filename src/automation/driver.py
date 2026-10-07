@@ -210,7 +210,15 @@ class Browser:
         use_undetected_firefox: bool = True,
         firefox_install_dir: str | None = None,
         post_launch_delay: tuple[float, float] = (0.1, 0.3),
+        done_browser: list[str] | None = None,
     ):
+        if done_browser is None:
+            done_browser = []
+
+        self.SUPPORTED = [
+            browser for browser in self.SUPPORTED
+            if browser not in done_browser
+        ]
         self.headless = headless
         self.user_agent = user_agent
         self.window_size = window_size or random.choice(self._WINDOW_SIZES)

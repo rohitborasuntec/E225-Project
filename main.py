@@ -3,8 +3,8 @@ import traceback
 import sys
 from pathlib import Path
 
-if __package__ in (None, ""):
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# if __package__ in (None, ""):
+#     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.automation.human_simulator import HumanSimulator
 from src.automation.driver import Browser
@@ -75,13 +75,13 @@ class G2Automation:
                 G2Comparison(
                     self.driver, self.human_simulator, comparing_product
                 ).run_g2_comparisons()
+                status = "Done"
             except Exception as e:
                 # Comparison failure should NOT override the main success.
-                status = "Done (comparison failed)"
+                status = "Failed at G2 Comparison"
                 logger.exception(f"G2 comparison failed: {e}")
-            else:
-                status = "Done"
-
+            # else:
+            
         except Exception:
             # status already set above; ensure we never leave it as "Unknown"
             if status == "Unknown":
@@ -431,7 +431,7 @@ if __name__ == "__main__":
     logger.info("Script Has Been Started..............")
 
     products = {
-        "SauceLabs":    ["Ranorex", "Testcomplete"],
+        "SauceLabs":    ["Ranorex", "TestComplete"],
         "BrowserStack": ["Qase", "accessiBe"],
     }
     location_manager = LocationManager()
@@ -446,7 +446,7 @@ if __name__ == "__main__":
 
     try:
         vpn = ExpressVPN()
-
+        done_browser = []
         for product, comparing_products in products.items():
             for comparing_product in comparing_products:
 
@@ -513,8 +513,9 @@ if __name__ == "__main__":
                     time.sleep(VPN_SETTLE_WAIT)
 
                     # ---- fresh browser per attempt ------------------
-                    manager = Browser(headless=False)
+                    manager = Browser(headless=False,done_browser=done_browser)
                     driver, browser = manager.launch()
+                    done_browser.append(browser)
                     human_simulator = HumanSimulator(driver)
                     gs = GoogleSearch(driver, human_simulator)
                     gs.get_google()
@@ -591,3 +592,4 @@ if __name__ == "__main__":
                 vpn.disconnect()
             except Exception:
                 pass
+            
