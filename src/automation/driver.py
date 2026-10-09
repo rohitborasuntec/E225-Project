@@ -188,7 +188,8 @@ class Browser:
         browser.quit()
     """
 
-    SUPPORTED = ["Chrome", "Brave", "Opera", "Edge", "Firefox"]
+    # SUPPORTED = ["Chrome", "Brave", "Opera", "Edge", "Firefox"]
+    SUPPORTED = ["Chrome", "Brave", "Edge", "Firefox"]
 
     _WINDOW_SIZES = [
         (1366, 768),

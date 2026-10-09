@@ -2,12 +2,15 @@ import random
 import os,time
 from pathlib import Path
 from urllib.parse import quote_plus
-from httpcore import TimeoutException
 from selenium.webdriver.common.by import By
 from src.logging import logger
 from src.commons import wait_for_element, save_html, get_random_word_or_sentence_faker
 from src.automation.xpath_pools import GOOGLE_RESULTS_POOL
-from twocaptcha import TwoCaptcha, ApiException
+try:
+    from twocaptcha import TwoCaptcha, ApiException
+except ImportError:
+    TwoCaptcha = None
+    ApiException = Exception
 from selenium.common.exceptions import (
     TimeoutException, NoSuchElementException, StaleElementReferenceException,
 )
@@ -16,6 +19,7 @@ class GoogleSearch:
     def __init__(self, driver, human_simulator):
         self.driver = driver
         self.human_simulator = human_simulator
+        self.last_query = None
 
     # ---------------- captcha solving ---------------- #
 
@@ -222,6 +226,13 @@ class GoogleSearch:
     ) -> str | None:
         """Solve the reCAPTCHA on the current page using 2Captcha."""
 
+        if TwoCaptcha is None:
+            logger.warning(
+                "[captcha] Optional 2Captcha dependency is unavailable; "
+                "automatic CAPTCHA handling skipped."
+            )
+            return None
+
         if self.driver is None:
             raise RuntimeError("No active browser. Call Browser.launch() first.")
 
@@ -419,6 +430,7 @@ class GoogleSearch:
 
             for keyword in keywords:
                 query = get_random_word_or_sentence_faker(keyword).lower()
+                self.last_query = query
 
                 wait_for_element(
                     self.driver,

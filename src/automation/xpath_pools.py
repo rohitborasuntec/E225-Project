@@ -174,6 +174,58 @@ G2_PRODUCT_POOL = {
 
 
 # ======================================================================
+# TESTMU DESTINATION PAGE
+# ======================================================================
+# Generic content locators keep the MU flow useful when TestMu changes its
+# page layout, while the safe click is limited to collapsed controls.
+TESTMU_PAGE_POOL = {
+    "xpaths": {
+        "headings": ["//h1", "//h2", "//h3"],
+        "paragraphs": ["//p", "//li"],
+        "content_sections": [
+            "//main//*[self::section or self::article or @role='region']",
+            "//*[contains(@class,'card') or contains(@class,'feature')]",
+        ],
+        "images": ["//main//img", "//img"],
+        "expanders": [
+            "//button[@aria-expanded='false']",
+            "//*[@role='button' and @aria-expanded='false']",
+        ],
+        "specified_image": [
+            '//*[@id="__next"]/div/main/div/section[1]/img',
+        ],
+        "specified_text": [
+            '//*[@id="__next"]/div/main/div/section[3]/div/div',
+            '//*[@id="__next"]/div/main/div/div[2]',
+            '//*[@id="__next"]/div/main/div/section[6]',
+        ],
+        "specified_hover": [
+            '//*[@id="__next"]/div/main/div/div[4]/div/div/div',
+        ],
+    },
+    "weights": {
+        "headings": 3,
+        "paragraphs": 4,
+        "content_sections": 4,
+        "images": 2,
+        "expanders": 2,
+        "specified_image": 2,
+        "specified_text": 4,
+        "specified_hover": 3,
+    },
+    "safe_click": {"expanders"},
+    "dwell": {
+        "headings": (2.0, 4.0),
+        "paragraphs": (2.5, 5.0),
+        "content_sections": (3.0, 6.0),
+        "images": (3.0, 6.0),
+        "expanders": (1.0, 2.5),
+    },
+    "default_dwell": (2.5, 5.0),
+}
+
+
+# ======================================================================
 # G2 BROWSERSTACK PAGE (managed by G2_page.py)
 # ======================================================================
 # Keep the page-specific locators here so changes to G2's markup can be

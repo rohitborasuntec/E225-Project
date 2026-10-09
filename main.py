@@ -1,7 +1,15 @@
 import random
 import traceback
 import sys
+import argparse
+import time
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
+
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import NoSuchWindowException, TimeoutException
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 # if __package__ in (None, ""):
 #     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -12,11 +20,450 @@ from src.commons import *
 from src.automation.vpn.vpn_automation import ExpressVPN
 from src.automation.location_manager import LocationManager
 from src.logging import logger
-from src.automation.google_work import GoogleSearch
-from src.automation.G2_comparison import G2Comparison
-from src.automation.G2_page import G2Page
-from src.automation.errors import AccessDeniedError
-from src.excel import Excel
+from src.excel import Excel, SponsoredResultTracker
+
+
+class TestMuAutomation:
+    """Run the TestMu sponsored-result flow from main.py."""
+
+    TESTMU_DOMAIN = "testmuai.com"
+    SPONSORED_LINK_XPATH = (
+        '//*[@id="tads"]//a[@href] | //*[@id="tadsb"]//a[@href]'
+    )
+
+    def __init__(self, driver, human_simulator, google_search=None):
+        self.driver = driver
+        self.human_simulator = human_simulator
+        self.google_search = google_search
+        self.tracker = SponsoredResultTracker()
+
+    @staticmethod
+    def _g2_search_combinations():
+        """Use the same randomized Google search inputs as G2Automation."""
+        categories = [
+            "word", "name", "country", "movie", "music", "sports",
+            "technology", "News",
+        ]
+        test_keywords = [
+            "browser tests", "software testing", "automation tests",
+            "ai in test cases", "app android", "android on browser",
+        ]
+        return [
+            (random.choices(categories, k=2), True),
+            (random.choices(test_keywords, k=2), False),
+        ]
+
+    @staticmethod
+    def _advertiser_website(href):
+        """Return the advertiser domain from a direct or Google redirect URL."""
+        if not href:
+            return None
+
+        current = href
+        for _ in range(2):
+            parsed = urlparse(current)
+            query = parse_qs(parsed.query)
+            redirected = next(
+                (
+                    values[0]
+                    for key in ("adurl", "url", "q")
+                    if (values := query.get(key))
+                ),
+                None,
+            )
+            if not redirected:
+                break
+            current = unquote(redirected)
+
+        hostname = (urlparse(current).hostname or "").lower()
+        if hostname.startswith("www."):
+            hostname = hostname[4:]
+        google_tracking_domains = (
+            "google.com",
+            "googleadservices.com",
+            "doubleclick.net",
+            "gstatic.com",
+        )
+        if not hostname or hostname.endswith(google_tracking_domains):
+            return None
+        return hostname
+
+    def inspect_sponsored_results(self):
+        logger.info("Opening Google for G2-style sponsored-result inspection")
+        if self.google_search is not None:
+            self.google_search.get_google()
+            self.google_search.search_work(self._g2_search_combinations())
+        else:
+            self.driver.get("https://www.google.com/")
+            WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
+                EC.presence_of_element_located((By.NAME, "q"))
+            )
+            self.human_simulator.input_search_query(
+                "test management software",
+                suggestion=False,
+            )
+            WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
+                lambda driver: (
+                    "/search" in driver.current_url
+                    or "/sorry" in driver.current_url
+                )
+            )
+
+        if "/sorry" in self.driver.current_url:
+            logger.warning(
+                "Google CAPTCHA detected; waiting up to 120 seconds for manual completion"
+            )
+            try:
+                WebDriverWait(self.driver, 120, poll_frequency=0.5).until(
+                    lambda driver: (
+                        "/sorry" not in driver.current_url
+                        and (
+                            "/search" in driver.current_url
+                            or bool(driver.find_elements(By.ID, "search"))
+                        )
+                    )
+                )
+                logger.info(
+                    "Manual CAPTCHA completion detected; resuming sponsored inspection"
+                )
+            except TimeoutException:
+                logger.warning(
+                    "CAPTCHA was not completed within 120 seconds; "
+                    "sponsored inspection stopped"
+                )
+                return False
+
+        results = {}
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            for link in self.driver.find_elements(By.XPATH, self.SPONSORED_LINK_XPATH):
+                try:
+                    if not link.is_displayed():
+                        continue
+                    href = link.get_attribute("href") or ""
+                    website = self._advertiser_website(href)
+                    if website:
+                        key = (href, link.text.strip())
+                        results.setdefault(key, {
+                            "element": link,
+                            "href": href,
+                            "title": link.text.strip(),
+                            "website": website,
+                            "result_text": link.find_element(
+                                By.XPATH, "./ancestor::div[@data-text-ad][1]"
+                            ).text.strip() if link.find_elements(
+                                By.XPATH, "./ancestor::div[@data-text-ad][1]"
+                            ) else link.text.strip(),
+                        })
+                except Exception as error:
+                    logger.warning(f"Sponsored result inspection failed: {error}")
+            if results:
+                break
+            time.sleep(0.25)
+
+        if not results:
+            logger.info("No advertiser websites found in either sponsored section")
+            return False
+
+        target = None
+        search_query = (
+            getattr(self.google_search, "last_query", None)
+            or "G2-style randomized Google search"
+        )
+        for result in results.values():
+            website = result["website"].casefold()
+            is_testmu = website == self.TESTMU_DOMAIN or website.endswith(
+                f".{self.TESTMU_DOMAIN}"
+            )
+            self.tracker.record_result({
+                "Search Query": search_query,
+                "Title": result["title"],
+                "Website Name": result["website"],
+                "Link": result["href"],
+                "Result Text": result["result_text"],
+                "TestMu Result": "Yes" if is_testmu else "No",
+            })
+            logger.info(
+                f"Sponsored website detected: {result['website']} "
+                f"({result['title']})"
+            )
+            if is_testmu and target is None:
+                target = result
+
+        logger.info(
+            f"Stored {len(results)} sponsored result(s) in Excel; "
+            f"query={search_query}; workbook={self.tracker.file_name}"
+        )
+        return target
+
+    def run(self):
+        target = self.inspect_sponsored_results()
+        if not target:
+            logger.info("TestMu was not found; no sponsored result will be clicked")
+            return False
+
+        logger.info(
+            "TestMu sponsored result found; clicking Google result "
+            f"link={target['href']}"
+        )
+        old_url = self.driver.current_url
+        old_handles = set(self.driver.window_handles)
+        self.human_simulator.mouse_hover(target["element"], hover_time=1.0)
+        self.human_simulator.mouse_click_after_hover(target["element"])
+
+        def destination_opened(_):
+            new_handles = set(self.driver.window_handles) - old_handles
+            if new_handles:
+                self.driver.switch_to.window(next(iter(new_handles)))
+                return self.driver.current_url != "about:blank"
+            return self.driver.current_url != old_url
+
+        try:
+            WebDriverWait(self.driver, 8, poll_frequency=0.25).until(
+                destination_opened
+            )
+        except TimeoutException:
+            # Native cursor clicks can miss Google's dynamic ad hit area. Keep
+            # the click on the sponsored anchor and use the same fallbacks as
+            # the existing G2 interactions before treating it as a failure.
+            logger.warning("Sponsored anchor click did not navigate; retrying")
+            try:
+                target["element"].click()
+            except Exception:
+                self.driver.execute_script("arguments[0].click();", target["element"])
+            WebDriverWait(self.driver, 22, poll_frequency=0.25).until(
+                destination_opened
+            )
+        new_handles = set(self.driver.window_handles) - old_handles
+        if new_handles:
+            self.driver.switch_to.window(next(iter(new_handles)))
+        WebDriverWait(self.driver, 30, poll_frequency=0.25).until(
+            EC.presence_of_element_located((By.TAG_NAME, "body"))
+        )
+        logger.info(f"TestMu destination opened: {self.driver.current_url}")
+        from src.automation.xpath_pools import TESTMU_PAGE_POOL
+
+        browse_duration = random.uniform(15, 25)
+        browse_log = self.human_simulator.browse_page_randomly(
+            duration=browse_duration,
+            pool=TESTMU_PAGE_POOL,
+        )
+        logger.info(
+            f"TestMu human browsing started: duration={round(browse_duration)}s "
+            f"summary={browse_log}"
+        )
+
+        expandable_controls = [
+            element
+            for element in self.driver.find_elements(
+                By.XPATH,
+                "//button[@aria-expanded='false'] | "
+                "//*[@role='button' and @aria-expanded='false']",
+            )
+            if element.is_displayed()
+        ]
+        if expandable_controls:
+            try:
+                control = random.choice(expandable_controls)
+                self.human_simulator.mouse_hover(control, hover_time=0.8)
+                self.human_simulator.mouse_click_after_hover(control)
+                logger.info("TestMu expandable control clicked")
+            except Exception as error:
+                logger.warning(f"TestMu expandable click skipped: {error}")
+        else:
+            logger.info("TestMu expandable control click: none available")
+
+        # Exercise the exact TestMu regions supplied for this flow.
+        for xpath in TESTMU_PAGE_POOL["xpaths"]["specified_image"]:
+            for element in self.driver.find_elements(By.XPATH, xpath):
+                try:
+                    if not element.is_displayed():
+                        continue
+                    self.human_simulator.bring_element_into_view_with_wheel(element)
+                    self.human_simulator.mouse_hover(element, hover_time=1.2)
+                    logger.info(f"TestMu specified image hovered: {xpath}")
+                except Exception as error:
+                    logger.warning(f"TestMu specified image skipped: {error}")
+
+        for xpath in TESTMU_PAGE_POOL["xpaths"]["specified_text"]:
+            for element in self.driver.find_elements(By.XPATH, xpath):
+                try:
+                    if not element.is_displayed():
+                        continue
+                    self.human_simulator.bring_element_into_view_with_wheel(element)
+                    selected = self.human_simulator.select_text_in_element(element)
+                    logger.info(
+                        f"TestMu specified text selection: xpath={xpath} "
+                        f"selected={selected}"
+                    )
+                except Exception as error:
+                    logger.warning(
+                        f"TestMu specified text selection skipped: {error}"
+                    )
+
+        for xpath in TESTMU_PAGE_POOL["xpaths"]["specified_hover"]:
+            for element in self.driver.find_elements(By.XPATH, xpath):
+                try:
+                    if not element.is_displayed():
+                        continue
+                    self.human_simulator.bring_element_into_view_with_wheel(element)
+                    self.human_simulator.mouse_hover(element, hover_time=2.0)
+                    logger.info(f"TestMu specified region hovered: {xpath}")
+                except Exception as error:
+                    logger.warning(f"TestMu specified hover skipped: {error}")
+
+        # Dismiss common consent or announcement controls when TestMu shows
+        # them. These labels are intentionally limited to non-navigation UI.
+        dismiss_controls = self.driver.find_elements(
+            By.XPATH,
+            "//button[contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            "'accept') or contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            "'allow') or contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            "'close') or contains(translate(normalize-space(.), "
+            "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+            "'got it')]",
+        )
+        visible_dismiss_controls = [
+            element for element in dismiss_controls if element.is_displayed()
+        ]
+        if visible_dismiss_controls:
+            try:
+                control = visible_dismiss_controls[0]
+                self.human_simulator.mouse_hover(control, hover_time=0.5)
+                self.human_simulator.mouse_click_after_hover(control)
+                logger.info("TestMu consent/announcement control clicked")
+            except Exception as error:
+                logger.warning(f"TestMu consent control skipped: {error}")
+
+        for selection_number in range(random.randint(1, 3)):
+            try:
+                words = self.human_simulator.select_random_words(
+                    random.randint(2, 4)
+                )
+                logger.info(
+                    f"TestMu word selection {selection_number + 1}: {words}"
+                )
+            except Exception as error:
+                logger.warning(f"TestMu word selection skipped: {error}")
+
+        # Hover over a few content elements to create natural reading pauses.
+        content_elements = self.driver.find_elements(
+            By.CSS_SELECTOR,
+            "main h1, main h2, main h3, main p, main img, "
+            "article h2, article h3, section h2, section h3",
+        )
+        visible_content = [
+            element for element in content_elements if element.is_displayed()
+        ]
+        for element in random.sample(
+            visible_content, min(len(visible_content), random.randint(2, 5))
+        ):
+            try:
+                self.human_simulator.mouse_hover(
+                    element, hover_time=random.uniform(0.8, 2.0)
+                )
+            except Exception as error:
+                logger.warning(f"TestMu content hover skipped: {error}")
+
+        # Finish with a full page pass so both upper and lower sections are
+        # visited even when the random pool has few matching elements.
+        for direction in ("down", "up"):
+            try:
+                self.human_simulator.scroll_page(
+                    total_scroll=random.randint(5, 9),
+                    step_delay=random.uniform(0.12, 0.3),
+                    direction=direction,
+                )
+                logger.info(f"TestMu full-page scroll completed: direction={direction}")
+            except Exception as error:
+                logger.warning(
+                    f"TestMu full-page scroll skipped ({direction}): {error}"
+                )
+
+        # Add explicit reading and scrolling actions so the destination is
+        # explored even when the page pool finds few interactive elements.
+        for action_number in range(random.randint(2, 4)):
+            try:
+                selected = self.human_simulator.select_text_once()
+                logger.info(
+                    f"TestMu text selection {action_number + 1}: "
+                    f"{bool(selected)}"
+                )
+            except Exception as error:
+                logger.warning(f"TestMu text selection skipped: {error}")
+
+            try:
+                self.human_simulator.scroll_page(
+                    total_scroll=random.randint(2, 5),
+                    step_delay=random.uniform(0.15, 0.35),
+                    direction=random.choice(("down", "up")),
+                )
+                logger.info(f"TestMu scroll completed: action={action_number + 1}")
+            except Exception as error:
+                logger.warning(f"TestMu scroll skipped: {error}")
+
+        logger.info(
+            "TestMu sponsored-result flow completed with human-simulator browsing"
+        )
+        return True
+
+
+def run_mu_flow(browser_name="Chrome"):
+    """Run the standalone TestMu sponsored-result inspection from main.py."""
+    # Keep Google navigation on the same helper used by the G2 workflow.
+    from src.automation.google_work import GoogleSearch
+
+    max_attempts = 3
+    for attempt in range(1, max_attempts + 1):
+        manager = Browser(headless=False, window_size=None)
+        try:
+            logger.info(
+                f"Starting TestMu browser attempt {attempt}/{max_attempts}"
+            )
+            driver, browser = manager.launch(browser_name)
+            if not driver.window_handles:
+                raise NoSuchWindowException(
+                    "Chrome started without an available browser window"
+                )
+            driver.switch_to.window(driver.window_handles[0])
+            logger.info(f"Browser launched for TestMu flow: {browser}")
+            human_simulator = HumanSimulator(driver, use_native_cursor=True)
+            google_search = GoogleSearch(driver, human_simulator)
+            return TestMuAutomation(
+                driver, human_simulator, google_search=google_search
+            ).run()
+        except NoSuchWindowException as error:
+            if attempt >= max_attempts:
+                logger.exception(
+                    f"Chrome window closed on final attempt: {error}"
+                )
+                raise
+            logger.warning(
+                "Chrome window closed before navigation; retrying with a fresh session"
+            )
+            time.sleep(1)
+        finally:
+            try:
+                manager.quit()
+            except Exception as error:
+                logger.warning(f"Browser cleanup skipped: {error}")
+            logger.info(
+                f"TestMu browser attempt {attempt}/{max_attempts} closed"
+            )
+
+
+def get_execution_option():
+    parser = argparse.ArgumentParser(description="Run E225 automation")
+    parser.add_argument(
+        "--opt",
+        choices=("g2", "mu"),
+        default="g2",
+        help="g2 runs the existing G2 process; mu checks the TestMu sponsored result",
+    )
+    return parser.parse_args().opt
 
 
 class G2Automation:
@@ -430,11 +877,28 @@ class G2Automation:
 if __name__ == "__main__":
     logger.info("Script Has Been Started..............")
 
+    execution_option = get_execution_option()
+    logger.info(f"Selected execution option: {execution_option}")
+    if execution_option == "mu":
+        try:
+            run_mu_flow()
+        except Exception as error:
+            logger.exception(f"TestMu flow failed: {error}")
+            raise
+        sys.exit(0)
+    else:
+        # Load G2-only dependencies only for the original G2 workflow.
+        from src.automation.google_work import GoogleSearch
+        from src.automation.G2_comparison import G2Comparison
+        from src.automation.G2_page import G2Page
+        from src.automation.errors import AccessDeniedError
+
     products = {
         "SauceLabs":    ["Ranorex", "TestComplete"],
         "BrowserStack": ["Qase", "accessiBe"],
     }
-    location_manager = LocationManager()
+    USE_VPN = False  # Local development: set True when VPN testing is needed.
+    location_manager = LocationManager() if USE_VPN else None
     manager = None
     vpn = None
 
@@ -445,7 +909,10 @@ if __name__ == "__main__":
     # -----------------------------------------
 
     try:
-        vpn = ExpressVPN()
+        if USE_VPN:
+            vpn = ExpressVPN()
+        else:
+            logger.info("VPN disabled for local development")
         done_browser = []
         for product, comparing_products in products.items():
             for comparing_product in comparing_products:
@@ -469,38 +936,41 @@ if __name__ == "__main__":
                 logger.info(f"Starting comparison for {product} and {comparing_product}")
                 pair_done = False
 
-                for pair_attempt in range(1, MAX_VPN_ATTEMPTS + 1):
+                pair_attempts = MAX_VPN_ATTEMPTS if USE_VPN else 1
+                for pair_attempt in range(1, pair_attempts + 1):
 
                     # ---- pick + connect a fresh VPN -----------------
-                    location = None
-                    for vpn_attempt in range(1, MAX_VPN_ATTEMPTS + 1):
-                        if not location_manager.has_next():
-                            logger.error(
-                                "No VPN locations left — aborting remaining work."
-                            )
-                            break
+                    location = "Local"
+                    if USE_VPN:
+                        location = None
+                        for vpn_attempt in range(1, MAX_VPN_ATTEMPTS + 1):
+                            if not location_manager.has_next():
+                                logger.error(
+                                    "No VPN locations left — aborting remaining work."
+                                )
+                                break
 
-                        candidate = location_manager.next()
-                        try:
-                            vpn.connect(candidate)
-                            location = candidate
-                            logger.info(
-                                f"[VPN] Connected to '{candidate}' "
-                                f"(pair attempt {pair_attempt}/"
-                                f"{MAX_VPN_ATTEMPTS}, "
-                                f"connect try {vpn_attempt}/"
-                                f"{MAX_VPN_ATTEMPTS})"
-                            )
-                            break
-                        except Exception as e:
-                            logger.warning(
-                                f"[VPN] '{candidate}' rejected ({e}); "
-                                f"blacklisting and picking another."
-                            )
-                            location_manager.mark_failed(candidate)
-                            vpn.disconnect()
-                            time.sleep(POST_DISCONNECT_WAIT)
-                            continue
+                            candidate = location_manager.next()
+                            try:
+                                vpn.connect(candidate)
+                                location = candidate
+                                logger.info(
+                                    f"[VPN] Connected to '{candidate}' "
+                                    f"(pair attempt {pair_attempt}/"
+                                    f"{MAX_VPN_ATTEMPTS}, "
+                                    f"connect try {vpn_attempt}/"
+                                    f"{MAX_VPN_ATTEMPTS})"
+                                )
+                                break
+                            except Exception as e:
+                                logger.warning(
+                                    f"[VPN] '{candidate}' rejected ({e}); "
+                                    f"blacklisting and picking another."
+                                )
+                                location_manager.mark_failed(candidate)
+                                vpn.disconnect()
+                                time.sleep(POST_DISCONNECT_WAIT)
+                                continue
 
                     if location is None:
                         logger.error(
@@ -510,7 +980,8 @@ if __name__ == "__main__":
                         break   # out of pair_attempt loop, move to next pair
 
                     # ---- let the tunnel stabilise -------------------
-                    time.sleep(VPN_SETTLE_WAIT)
+                    if USE_VPN:
+                        time.sleep(VPN_SETTLE_WAIT)
 
                     # ---- fresh browser per attempt ------------------
                     manager = Browser(headless=False,done_browser=done_browser)
@@ -532,7 +1003,8 @@ if __name__ == "__main__":
                             f"Comparison Process Completed for "
                             f"{product}/{comparing_product} via '{location}'"
                         )
-                        location_manager.mark_success(location)
+                        if USE_VPN:
+                            location_manager.mark_success(location)
                         pair_done = True
 
                     except AccessDeniedError as blocked:
@@ -542,14 +1014,21 @@ if __name__ == "__main__":
                             f"{product}/{comparing_product} on '{location}': "
                             f"{blocked}. Restarting flow with a new VPN."
                         )
-                        location_manager.mark_failed(location)
-                        retry_needed = True
+                        if USE_VPN:
+                            location_manager.mark_failed(location)
+                            retry_needed = True
+                        else:
+                            logger.warning(
+                                "VPN retry is disabled in local development mode"
+                            )
+                            pair_done = True
 
                     except Exception as e:
                         logger.error(
                             f"run_g2 failed for {product}/{comparing_product}: {e}"
                         )
-                        location_manager.mark_failed(location)
+                        if USE_VPN:
+                            location_manager.mark_failed(location)
                         # Non-AccessDenied failures: do NOT restart the whole
                         # pair with a new VPN — it's most likely a code / data
                         # problem, not a network block.
@@ -565,12 +1044,12 @@ if __name__ == "__main__":
                                 pass
                             manager = None
 
-                        try:
-                            vpn.disconnect()
-                        except Exception:
-                            pass
-
-                        time.sleep(POST_DISCONNECT_WAIT)
+                        if USE_VPN and vpn is not None:
+                            try:
+                                vpn.disconnect()
+                            except Exception:
+                                pass
+                            time.sleep(POST_DISCONNECT_WAIT)
 
                     if pair_done:
                         break   # done with this pair for this run
@@ -592,4 +1071,3 @@ if __name__ == "__main__":
                 vpn.disconnect()
             except Exception:
                 pass
-            

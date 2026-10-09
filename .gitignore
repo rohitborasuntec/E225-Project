@@ -6,3 +6,5 @@ __pycache__
 Logs
 HTML
 Output
+.venv
+.env
