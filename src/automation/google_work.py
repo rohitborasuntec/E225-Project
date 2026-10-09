@@ -422,7 +422,14 @@ class GoogleSearch:
         return True
 
 
-    def search_work(self, keyword_combos):
+    def search_work(
+        self,
+        keyword_combos,
+        step_callback=None,
+        browse_duration=10,
+        max_element_attempts=7,
+        scroll_on_missing=True,
+    ):
         
         for keyword_combo in keyword_combos:
             keywords = keyword_combo[0]
@@ -430,6 +437,8 @@ class GoogleSearch:
 
             for keyword in keywords:
                 query = get_random_word_or_sentence_faker(keyword).lower()
+                if step_callback:
+                    step_callback("google_query_started", query)
                 self.last_query = query
 
                 wait_for_element(
@@ -492,7 +501,7 @@ class GoogleSearch:
                 save_html(html_text=self.driver.page_source, file_name=query)
 
                 clicked = False
-                for attempt in range(7):
+                for attempt in range(max_element_attempts):
                     try:
                         elem_xpath = self.get_elem_xpaths()
                         logger.info(f"Attempt {attempt + 1}: Elem XPath found: {elem_xpath}")
@@ -506,9 +515,14 @@ class GoogleSearch:
                             break
                         except Exception as e:
                             logger.warning(f"{elem_xpath} not found")
-                            self.human_simulator.scroll_page(
-                                total_scroll=5, step_delay=0.3, direction="down"
-                            )
+                            if scroll_on_missing:
+                                self.human_simulator.scroll_page(
+                                    total_scroll=5,
+                                    step_delay=0.3,
+                                    direction="down",
+                                )
+                            else:
+                                break
                     except Exception as e:
                         logger.error(f"random_words failed for keyword '{keyword}' ")
 
@@ -517,9 +531,12 @@ class GoogleSearch:
                         f"Could not find/click any element after 7 attempts "
                         f"for query '{query}'"
                     )
-                self.human_simulator.browse_page_randomly(
-                    duration=10, pool=GOOGLE_RESULTS_POOL
+                browse_log = self.human_simulator.browse_page_randomly(
+                    duration=browse_duration, pool=GOOGLE_RESULTS_POOL
                 )
+                if step_callback:
+                    step_callback("google_query_completed", query)
+                    step_callback("google_browse_completed", str(browse_log))
 
     def get_google(self, query=None, blocked=False):
         url = "https://www.google.com"

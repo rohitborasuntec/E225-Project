@@ -37,6 +37,19 @@ class TestMuAutomation:
         self.google_search = google_search
         self.tracker = SponsoredResultTracker()
 
+    def _step(self, name, status="ok", details=""):
+        self.tracker.log_event(name, status, details)
+        logger.info(f"MU step={name} status={status} {details}".rstrip())
+
+    def _bring_into_view_if_needed(self, element):
+        in_view = self.driver.execute_script(
+            "const r=arguments[0].getBoundingClientRect(); "
+            "return r.top >= 80 && r.bottom <= window.innerHeight - 40;",
+            element,
+        )
+        if not in_view:
+            self.human_simulator.bring_element_into_view_with_wheel(element)
+
     @staticmethod
     def _g2_search_combinations():
         """Use the same randomized Google search inputs as G2Automation."""
@@ -89,10 +102,18 @@ class TestMuAutomation:
         return hostname
 
     def inspect_sponsored_results(self):
-        logger.info("Opening Google for G2-style sponsored-result inspection")
+        self._step("google_open", details="G2-style sponsored-result inspection")
         if self.google_search is not None:
             self.google_search.get_google()
-            self.google_search.search_work(self._g2_search_combinations())
+            self._step("google_search_work_started")
+            self.google_search.search_work(
+                self._g2_search_combinations(),
+                step_callback=lambda step, details: self._step(step, details=details),
+                browse_duration=0,
+                max_element_attempts=1,
+                scroll_on_missing=False,
+            )
+            self._step("google_search_work_completed")
         else:
             self.driver.get("https://www.google.com/")
             WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
@@ -162,6 +183,7 @@ class TestMuAutomation:
             time.sleep(0.25)
 
         if not results:
+            self._step("sponsored_scan", "empty", "no sponsored websites found")
             logger.info("No advertiser websites found in either sponsored section")
             return False
 
@@ -187,6 +209,10 @@ class TestMuAutomation:
                 f"Sponsored website detected: {result['website']} "
                 f"({result['title']})"
             )
+            self._step(
+                "sponsored_result_saved",
+                details=f"website={result['website']} query={search_query}",
+            )
             if is_testmu and target is None:
                 target = result
 
@@ -194,14 +220,17 @@ class TestMuAutomation:
             f"Stored {len(results)} sponsored result(s) in Excel; "
             f"query={search_query}; workbook={self.tracker.file_name}"
         )
+        self._step("sponsored_scan_completed", details=f"count={len(results)}")
         return target
 
     def run(self):
         target = self.inspect_sponsored_results()
         if not target:
+            self._step("testmu_target", "not_found")
             logger.info("TestMu was not found; no sponsored result will be clicked")
             return False
 
+        self._step("testmu_click_started", details=target["href"])
         logger.info(
             "TestMu sponsored result found; clicking Google result "
             f"link={target['href']}"
@@ -227,6 +256,7 @@ class TestMuAutomation:
             # the click on the sponsored anchor and use the same fallbacks as
             # the existing G2 interactions before treating it as a failure.
             logger.warning("Sponsored anchor click did not navigate; retrying")
+            self._step("testmu_click_fallback", "retry")
             try:
                 target["element"].click()
             except Exception:
@@ -241,9 +271,10 @@ class TestMuAutomation:
             EC.presence_of_element_located((By.TAG_NAME, "body"))
         )
         logger.info(f"TestMu destination opened: {self.driver.current_url}")
+        self._step("testmu_destination_opened", details=self.driver.current_url)
         from src.automation.xpath_pools import TESTMU_PAGE_POOL
 
-        browse_duration = random.uniform(15, 25)
+        browse_duration = random.uniform(3, 5)
         browse_log = self.human_simulator.browse_page_randomly(
             duration=browse_duration,
             pool=TESTMU_PAGE_POOL,
@@ -252,6 +283,7 @@ class TestMuAutomation:
             f"TestMu human browsing started: duration={round(browse_duration)}s "
             f"summary={browse_log}"
         )
+        self._step("testmu_browse_completed", details=str(browse_log))
 
         expandable_controls = [
             element
@@ -268,6 +300,7 @@ class TestMuAutomation:
                 self.human_simulator.mouse_hover(control, hover_time=0.8)
                 self.human_simulator.mouse_click_after_hover(control)
                 logger.info("TestMu expandable control clicked")
+                self._step("testmu_expandable_click")
             except Exception as error:
                 logger.warning(f"TestMu expandable click skipped: {error}")
         else:
@@ -279,9 +312,10 @@ class TestMuAutomation:
                 try:
                     if not element.is_displayed():
                         continue
-                    self.human_simulator.bring_element_into_view_with_wheel(element)
+                    self._bring_into_view_if_needed(element)
                     self.human_simulator.mouse_hover(element, hover_time=1.2)
                     logger.info(f"TestMu specified image hovered: {xpath}")
+                    self._step("testmu_specified_image_hover", details=xpath)
                 except Exception as error:
                     logger.warning(f"TestMu specified image skipped: {error}")
 
@@ -290,12 +324,13 @@ class TestMuAutomation:
                 try:
                     if not element.is_displayed():
                         continue
-                    self.human_simulator.bring_element_into_view_with_wheel(element)
+                    self._bring_into_view_if_needed(element)
                     selected = self.human_simulator.select_text_in_element(element)
                     logger.info(
                         f"TestMu specified text selection: xpath={xpath} "
                         f"selected={selected}"
                     )
+                    self._step("testmu_specified_text_select", details=xpath)
                 except Exception as error:
                     logger.warning(
                         f"TestMu specified text selection skipped: {error}"
@@ -306,9 +341,10 @@ class TestMuAutomation:
                 try:
                     if not element.is_displayed():
                         continue
-                    self.human_simulator.bring_element_into_view_with_wheel(element)
+                    self._bring_into_view_if_needed(element)
                     self.human_simulator.mouse_hover(element, hover_time=2.0)
                     logger.info(f"TestMu specified region hovered: {xpath}")
+                    self._step("testmu_specified_hover", details=xpath)
                 except Exception as error:
                     logger.warning(f"TestMu specified hover skipped: {error}")
 
@@ -370,14 +406,15 @@ class TestMuAutomation:
 
         # Finish with a full page pass so both upper and lower sections are
         # visited even when the random pool has few matching elements.
-        for direction in ("down", "up"):
+        for direction in ():
             try:
                 self.human_simulator.scroll_page(
-                    total_scroll=random.randint(5, 9),
+                    total_scroll=random.randint(1, 2),
                     step_delay=random.uniform(0.12, 0.3),
                     direction=direction,
                 )
                 logger.info(f"TestMu full-page scroll completed: direction={direction}")
+                self._step("testmu_full_scroll", details=f"direction={direction}")
             except Exception as error:
                 logger.warning(
                     f"TestMu full-page scroll skipped ({direction}): {error}"
@@ -385,7 +422,7 @@ class TestMuAutomation:
 
         # Add explicit reading and scrolling actions so the destination is
         # explored even when the page pool finds few interactive elements.
-        for action_number in range(random.randint(2, 4)):
+        for action_number in range(1):
             try:
                 selected = self.human_simulator.select_text_once()
                 logger.info(
@@ -397,11 +434,12 @@ class TestMuAutomation:
 
             try:
                 self.human_simulator.scroll_page(
-                    total_scroll=random.randint(2, 5),
+                    total_scroll=random.randint(1, 2),
                     step_delay=random.uniform(0.15, 0.35),
-                    direction=random.choice(("down", "up")),
+                    direction="down",
                 )
-                logger.info(f"TestMu scroll completed: action={action_number + 1}")
+                logger.info("TestMu single scroll completed")
+                self._step("testmu_scroll", details="single short downward scroll")
             except Exception as error:
                 logger.warning(f"TestMu scroll skipped: {error}")
 
