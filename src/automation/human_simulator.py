@@ -227,11 +227,17 @@ class HumanSimulator:
 
     # ---------- Scroll position helpers ----------
     def _get_scroll_state(self):
-        return self.driver.execute_script(
-            "return [document.documentElement.scrollTop || document.body.scrollTop, "
-            "document.documentElement.scrollHeight, "
-            "document.documentElement.clientHeight];"
-        )
+        try:
+            state = self.driver.execute_script(
+                "return [document.documentElement.scrollTop || document.body.scrollTop, "
+                "document.documentElement.scrollHeight, "
+                "document.documentElement.clientHeight];"
+            )
+            if isinstance(state, (list, tuple)) and len(state) == 3:
+                return state
+        except Exception as error:
+            logger.debug(f"Scroll state unavailable: {error}")
+        return 0, 0, 0
 
     def _can_scroll_down(self):
         scroll_top, scroll_height, client_height = self._get_scroll_state()
