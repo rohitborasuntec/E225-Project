@@ -22,18 +22,30 @@ from src.automation.vpn.vpn_automation import ExpressVPN
 from src.automation.location_manager import LocationManager
 from src.logging import logger
 from src.excel import Excel, SponsoredResultTracker
+from src.automation.xpath_pools import MU_GOOGLE_POOL
 
 
 class TestMuAutomation:
     """Run the TestMu sponsored-result flow from main.py."""
 
     TESTMU_DOMAIN = "testmuai.com"
-    LOCAL_DIRECT_SEARCH = os.getenv("MU_LOCAL_DIRECT_SEARCH", "1") == "1"
+    # Default to the same randomized Google search flow used by G2.
+    # Set MU_LOCAL_DIRECT_SEARCH=1 only for local browserstack testing.
+    LOCAL_DIRECT_SEARCH = os.getenv("MU_LOCAL_DIRECT_SEARCH", "0") == "1"
     SPONSORED_LINK_XPATH = (
         '//*[@id="tads"]//a[@href] | //*[@id="tadsb"]//a[@href] | '
         '//div[@data-text-ad]//a[@href] | '
         '//div[contains(@class,"uEierd")]//a[@href] | '
-        '//a[contains(@href,"/aclk?")]'
+        '//a[contains(@href,"/aclk?")] | '
+        "//*[contains(translate(normalize-space(.), "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+        "'sponsored')]/ancestor::*[self::div or self::li][.//a[@href]][1]"
+        "//a[@href]"
+    )
+    SPONSORED_WORD_XPATH = (
+        "//*[contains(translate(normalize-space(.), "
+        "'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), "
+        "'sponsored')]"
     )
 
     def __init__(self, driver, human_simulator, google_search=None):
@@ -135,6 +147,7 @@ class TestMuAutomation:
                     scroll_on_missing=False,
                 )
                 self._step("google_search_work_completed")
+
         else:
             self.driver.get("https://www.google.com/")
             WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
@@ -150,6 +163,19 @@ class TestMuAutomation:
                     or "/sorry" in driver.current_url
                 )
             )
+
+        save_html(self.driver.page_source, "MU_sponsored_results")
+        self._step("sponsored_html_saved", details="MU_sponsored_results")
+        sponsored_labels = [
+            label for label in self.driver.find_elements(
+                By.XPATH, self.SPONSORED_WORD_XPATH
+            ) if label.is_displayed()
+        ]
+        self._step(
+            "sponsored_word_check",
+            "found" if sponsored_labels else "not_found",
+            f"labels={len(sponsored_labels)}",
+        )
 
         if "/sorry" in self.driver.current_url:
             logger.warning(
@@ -208,7 +234,6 @@ class TestMuAutomation:
 
         self._step("sponsored_candidates_collected", details=f"count={len(results)}")
 
-        target = None
         search_query = (
             getattr(self.google_search, "last_query", None)
             or "G2-style randomized Google search"
@@ -234,18 +259,332 @@ class TestMuAutomation:
                 "sponsored_result_saved",
                 details=f"website={result['website']} query={search_query}",
             )
-            if is_testmu and target is None:
-                target = result
-
         logger.info(
-            f"Stored {len(results)} sponsored result(s) in Excel; "
             f"query={search_query}; workbook={self.tracker.file_name}"
         )
         self._step("sponsored_scan_completed", details=f"count={len(results)}")
-        return target
+        return list(results.values())
+
+    def _browse_sponsored_website(self, website, max_seconds=30):
+        """Perform a short, bounded HumanSimulator interaction on one ad site."""
+        started = time.monotonic()
+        deadline = started + max_seconds
+        self._step(
+            "sponsored_site_browse_started",
+            details=f"website={website} max_seconds={max_seconds}",
+        )
+
+        # Keep this deliberately small: one selection, one short scroll, and
+        # one hover are enough to create a human-like visit without repeatedly
+        # walking the whole page.
+        try:
+            if time.monotonic() < deadline:
+                selected = self.human_simulator.select_text_once()
+                logger.info(f"HumanSimulator text selection on {website}: {bool(selected)}")
+                self._step("sponsored_site_text_select", details=f"website={website}")
+        except Exception as error:
+            logger.warning(f"Text selection skipped on {website}: {error}")
+
+        try:
+            if time.monotonic() < deadline:
+                self.human_simulator.scroll_page(
+                    total_scroll=random.randint(1, 2),
+                    step_delay=random.uniform(0.12, 0.25),
+                    direction="down",
+                )
+                logger.info(f"HumanSimulator short scroll on {website}")
+                self._step("sponsored_site_scroll", details=f"website={website}")
+        except Exception as error:
+            logger.warning(f"Short scroll skipped on {website}: {error}")
+
+        try:
+            if time.monotonic() < deadline:
+                elements = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    "main h1, main h2, main h3, main p, main img, "
+                    "article h2, article h3, section h2, section h3",
+                )
+                visible = [element for element in elements if element.is_displayed()]
+                if visible:
+                    element = random.choice(visible)
+                    self.human_simulator.mouse_hover(element, hover_time=0.8)
+                    logger.info(f"HumanSimulator hover on {website}")
+                    self._step("sponsored_site_hover", details=f"website={website}")
+        except Exception as error:
+            logger.warning(f"Hover skipped on {website}: {error}")
+
+        elapsed = round(time.monotonic() - started, 2)
+        logger.info(f"Sponsored website visit completed: {website}; elapsed={elapsed}s")
+        self._step("sponsored_site_browse_completed", details=f"website={website} elapsed={elapsed}s")
+
+    def _visit_all_sponsored_websites(self, results):
+        """Open every sponsored result entry and return to Google each time."""
+        if not results:
+            self._step("sponsored_site_visits", "empty")
+            return False
+
+        google_handle = self.driver.current_window_handle
+        google_url = self.driver.current_url
+        total_results = len(results)
+        self._step(
+            "sponsored_site_visit_queue",
+            details=f"total_entries={total_results}",
+        )
+
+        for result_number, result in enumerate(results, start=1):
+            website = result["website"]
+            self._step(
+                "sponsored_site_visit_started",
+                details=(
+                    f"entry={result_number}/{total_results} website={website} "
+                    f"href={result['href']}"
+                ),
+            )
+
+            try:
+                candidates = self.driver.find_elements(By.XPATH, self.SPONSORED_LINK_XPATH)
+                link = next(
+                    (
+                        candidate
+                        for candidate in candidates
+                        if candidate.is_displayed()
+                        and (
+                            candidate.get_attribute("href") == result["href"]
+                            or website_key in (candidate.get_attribute("href") or "").casefold()
+                        )
+                    ),
+                    None,
+                )
+                if link is None:
+                    self._step(
+                        "sponsored_site_skipped",
+                        details=(
+                            f"entry={result_number}/{total_results} website={website} "
+                            "link_not_found_on_current_google_page"
+                        ),
+                    )
+                    continue
+
+                old_url = self.driver.current_url
+                old_handles = set(self.driver.window_handles)
+                self._step(
+                    "sponsored_site_click_started",
+                    details=f"entry={result_number}/{total_results} website={website}",
+                )
+                self.human_simulator.mouse_hover(link, hover_time=0.5)
+                self.human_simulator.mouse_click_after_hover(link)
+
+                def destination_opened(_):
+                    new_handles = set(self.driver.window_handles) - old_handles
+                    if new_handles:
+                        self.driver.switch_to.window(next(iter(new_handles)))
+                        return self.driver.current_url != "about:blank"
+                    return self.driver.current_url != old_url
+
+                try:
+                    WebDriverWait(self.driver, 10, poll_frequency=0.25).until(destination_opened)
+                except TimeoutException:
+                    logger.warning(f"Sponsored click did not navigate on first attempt: {website}")
+                    try:
+                        link.click()
+                    except Exception:
+                        self.driver.execute_script("arguments[0].click();", link)
+                    WebDriverWait(self.driver, 10, poll_frequency=0.25).until(destination_opened)
+
+                new_handles = set(self.driver.window_handles) - old_handles
+                if new_handles:
+                    self.driver.switch_to.window(next(iter(new_handles)))
+                WebDriverWait(self.driver, 10, poll_frequency=0.25).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                logger.info(f"Sponsored website opened: {website}; url={self.driver.current_url}")
+                self._step(
+                    "sponsored_site_opened",
+                    details=(
+                        f"entry={result_number}/{total_results} website={website} "
+                        f"url={self.driver.current_url}"
+                    ),
+                )
+                self._browse_sponsored_website(website, max_seconds=30)
+            except Exception as error:
+                logger.warning(f"Sponsored website visit failed for {website}: {error}")
+                self._step(
+                    "sponsored_site_failed",
+                    details=(
+                        f"entry={result_number}/{total_results} website={website} "
+                        f"error={error}"
+                    ),
+                )
+            finally:
+                try:
+                    if self.driver.current_window_handle != google_handle:
+                        self.driver.close()
+                        self.driver.switch_to.window(google_handle)
+                    elif self.driver.current_url != google_url:
+                        self.driver.back()
+                    WebDriverWait(self.driver, 8, poll_frequency=0.25).until(
+                        lambda driver: "/search" in driver.current_url or bool(driver.find_elements(By.ID, "search"))
+                    )
+                except Exception as error:
+                    logger.warning(f"Could not restore Google results after {website}: {error}")
+                    try:
+                        self.driver.get(google_url)
+                    except Exception:
+                        pass
+                self._step(
+                    "sponsored_site_returned_to_google",
+                    details=f"entry={result_number}/{total_results} website={website}",
+                )
+
+        self._step(
+            "sponsored_site_visits_completed",
+            details=f"processed_entries={total_results}",
+        )
+        return True
+
+    def _click_google_page_two_and_scan(self):
+        """Open Google page 2 and collect its currently rendered sponsored ads."""
+        page_two_xpaths = MU_GOOGLE_POOL["xpaths"]["page_2"]
+        self._step("google_page_two_started", details=f"xpath_count={len(page_two_xpaths)}")
+        page_two_link = None
+        selected_page_two_xpath = None
+        for xpath in page_two_xpaths:
+            try:
+                candidates = self.driver.find_elements(By.XPATH, xpath)
+                page_two_link = next(
+                    (candidate for candidate in candidates if candidate.is_displayed()),
+                    None,
+                )
+                self._step(
+                    "google_page_two_xpath_checked",
+                    "found" if page_two_link else "not_found",
+                    details=xpath,
+                )
+                if page_two_link:
+                    selected_page_two_xpath = xpath
+                    break
+            except Exception as error:
+                logger.warning(f"Google page-2 XPath failed: {xpath}; error={error}")
+                self._step("google_page_two_xpath_error", "failed", f"xpath={xpath} error={error}")
+
+        if page_two_link is None:
+            self._step("google_page_two", "not_found", "page 2 link unavailable")
+            return []
+
+        old_url = self.driver.current_url
+        self._step(
+            "google_page_two_click_started",
+            details=selected_page_two_xpath or "unknown_xpath",
+        )
+        try:
+            self.human_simulator.mouse_hover(page_two_link, hover_time=0.4)
+            self.human_simulator.mouse_click_after_hover(page_two_link)
+            WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
+                lambda driver: driver.current_url != old_url
+            )
+            WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
+                EC.presence_of_element_located((By.ID, "search"))
+            )
+            self._step("google_page_two_opened", details=self.driver.current_url)
+        except Exception as error:
+            logger.warning(f"Google page 2 could not be opened: {error}")
+            self._step("google_page_two", "failed", details=str(error))
+            return []
+
+        save_html(self.driver.page_source, "MU_sponsored_results_page_2")
+        self._step("sponsored_html_saved", details="MU_sponsored_results_page_2")
+        results = {}
+        scan_deadline = time.monotonic() + 8
+        while time.monotonic() < scan_deadline:
+            try:
+                links = self.driver.find_elements(By.XPATH, self.SPONSORED_LINK_XPATH)
+                self._step("page_two_sponsored_scan_pass", details=f"links={len(links)}")
+                for link in links:
+                    try:
+                        if not link.is_displayed():
+                            continue
+                        href = link.get_attribute("href") or ""
+                        website = self._advertiser_website(href)
+                        if website:
+                            key = (href, link.text.strip())
+                            results.setdefault(key, {
+                                "element": link,
+                                "href": href,
+                                "title": link.text.strip(),
+                                "website": website,
+                                "result_text": link.text.strip(),
+                            })
+                    except Exception as error:
+                        logger.warning(f"Page-2 sponsored result inspection failed: {error}")
+                        self._step("page_two_sponsored_result_error", "failed", str(error))
+            except Exception as error:
+                logger.warning(f"Page-2 sponsored scan pass failed: {error}")
+                self._step("page_two_sponsored_scan_pass", "failed", str(error))
+            time.sleep(0.25)
+
+        self._step("page_two_sponsored_candidates_collected", details=f"count={len(results)}")
+        search_query = getattr(self.google_search, "last_query", None) or "Google page 2"
+        saved_count = 0
+        for result in results.values():
+            website = result["website"].casefold()
+            is_testmu = website == self.TESTMU_DOMAIN or website.endswith(f".{self.TESTMU_DOMAIN}")
+            try:
+                self.tracker.record_result({
+                    "Search Query": search_query,
+                    "Title": result["title"],
+                    "Website Name": result["website"],
+                    "Link": result["href"],
+                    "Result Text": result["result_text"],
+                    "TestMu Result": "Yes" if is_testmu else "No",
+                })
+                saved_count += 1
+                self._step("page_two_sponsored_result_saved", details=f"website={result['website']}")
+            except Exception as error:
+                logger.warning(f"Page-2 tracker save failed for {result['website']}: {error}")
+                self._step("page_two_sponsored_result_save", "failed", str(error))
+        self._step("google_page_two_completed", details=f"saved_count={saved_count}")
+        return list(results.values())
 
     def run(self):
-        target = self.inspect_sponsored_results()
+        results = self.inspect_sponsored_results()
+        testmu_results = [
+            result
+            for result in results
+            if (
+                result["website"].casefold() == self.TESTMU_DOMAIN
+                or result["website"].casefold().endswith(
+                    f".{self.TESTMU_DOMAIN}"
+                )
+            )
+        ] if results else []
+        if not testmu_results:
+            self._step("testmu_target", "not_found")
+            logger.info(
+                "TestMu was not found; sponsored websites were saved but not opened"
+            )
+            return False
+
+        self._step(
+            "testmu_target",
+            "found",
+            details=f"website={testmu_results[0]['website']}; opening all sponsored websites",
+        )
+        # Visit every sponsored result on page 1 first. A failed site is
+        # isolated inside _visit_all_sponsored_websites and cannot stop the loop.
+        page_one_completed = self._visit_all_sponsored_websites(results)
+        self._step("google_page_one_completed", details=f"completed={page_one_completed}")
+
+        # Page 2 is only opened after TestMu was confirmed on page 1.
+        page_two_results = self._click_google_page_two_and_scan()
+        if page_two_results:
+            page_two_completed = self._visit_all_sponsored_websites(page_two_results)
+            self._step("google_page_two_site_visits_completed", details=f"completed={page_two_completed}")
+        else:
+            self._step("google_page_two_site_visits", "empty", "no page-2 sponsored sites")
+        return True
+
+        # Legacy single-TestMu interaction flow retained below for reference.
+        target = None
         if not target:
             self._step("testmu_target", "not_found")
             logger.info("TestMu was not found; no sponsored result will be clicked")

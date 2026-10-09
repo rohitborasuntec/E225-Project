@@ -597,6 +597,41 @@ class HumanSimulator:
                 )
                 time.sleep(pause)
 
+        # Correct only the characters that were intentionally mistyped. Keep
+        # the rest of the query in the input instead of clearing and typing it
+        # again. HOME + ARROW_RIGHT moves the caret to the exact typo, then
+        # DELETE replaces that single character in place.
+        if typo_positions:
+            try:
+                self.mouse_click(search_box)
+                # A person usually notices a typo after a short pause rather
+                # than correcting it immediately while typing.
+                correction_pause = self._gauss(1.8, 0.55, 0.9, 3.4)
+                logger.info(
+                    f"Pausing {correction_pause:.2f}s before in-place typo correction"
+                )
+                time.sleep(correction_pause)
+                for index in sorted(typo_positions, reverse=True):
+                    search_box.send_keys(Keys.HOME)
+                    for _ in range(index):
+                        search_box.send_keys(Keys.ARROW_RIGHT)
+                        time.sleep(self._gauss(0.045, 0.018, 0.02, 0.1))
+                    time.sleep(self._gauss(0.18, 0.06, 0.08, 0.35))
+                    search_box.send_keys(Keys.DELETE)
+                    time.sleep(self._gauss(0.12, 0.04, 0.06, 0.25))
+                    search_box.send_keys(input_query[index])
+                    logger.info(
+                        f"Corrected typo in place at character index {index}; "
+                        f"preserved query text"
+                    )
+                time.sleep(
+                    think_pause
+                    if think_pause is not None
+                    else self._gauss(0.45, 0.12, 0.2, 0.9)
+                )
+            except Exception as error:
+                logger.warning(f"In-place typo correction failed: {error}")
+
         if suggestion:
             query_used = click_suggestion_box(search_box)
             if query_used:
@@ -608,10 +643,8 @@ class HumanSimulator:
             else self._gauss(0.6, 0.2, 0.2, 1.5)
         )
         time.sleep(final_pause)
-        search_box.clear()
-        for char in input_query:
-            search_box.send_keys(char)
-            time.sleep(self._gauss(0.18, 0.05, 0.09, 0.35))
+        # The query has already been corrected in place. Submit the existing
+        # value so a failed suggestion never causes a full-query replacement.
         self.mouse_click(search_box)
         search_box.submit()
         return input_query

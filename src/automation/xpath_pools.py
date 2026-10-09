@@ -174,6 +174,21 @@ G2_PRODUCT_POOL = {
 
 
 # ======================================================================
+# GOOGLE SPONSORED RESULTS PAGINATION (MU flow)
+# ======================================================================
+MU_GOOGLE_POOL = {
+    "xpaths": {
+        "page_2": [
+            '//*[@id="botstuff"]/div/div[4]/table/tbody/tr/td[3]/a',
+            '//a[@aria-label="Page 2"]',
+            '//a[contains(@href, "start=10")]',
+        ],
+    },
+    "safe_click": {"page_2"},
+}
+
+
+# ======================================================================
 # TESTMU DESTINATION PAGE
 # ======================================================================
 # Generic content locators keep the MU flow useful when TestMu changes its

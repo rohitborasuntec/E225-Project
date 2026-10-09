@@ -80,30 +80,16 @@ class SponsoredResultTracker:
     """Track sponsored websites in an Ads Clicked Tracker CSV matrix."""
 
     CSV_NAME = "TestMu Ads Clicked Tracker.csv"
-    RUN_LOG_NAME = "TestMu Run Log.csv"
 
     def __init__(self, output_path="Output"):
         os.makedirs(output_path, exist_ok=True)
         self.file_name = os.path.join(output_path, self.CSV_NAME)
-        self.csv_file_name = os.path.join(output_path, self.RUN_LOG_NAME)
         self._ensure_tracker_csv()
-        self._ensure_run_log_csv()
-
-    def _ensure_run_log_csv(self):
-        if os.path.exists(self.csv_file_name):
-            return
-        with open(self.csv_file_name, "w", newline="", encoding="utf-8") as file:
-            csv.writer(file).writerow(["Timestamp", "Step", "Status", "Details"])
-        logger.info(f"{self.csv_file_name} has been created")
 
     def log_event(self, step, status="ok", details=""):
-        with open(self.csv_file_name, "a", newline="", encoding="utf-8") as file:
-            csv.writer(file).writerow([
-                datetime.now().isoformat(timespec="seconds"),
-                step,
-                status,
-                details,
-            ])
+        # Full step logging is handled by the shared logger's CSV handler in
+        # CSV Logs/YYYY-MM-DD. Keep this compatibility method for MU callers.
+        return None
 
     def _ensure_tracker_csv(self):
         """Create/normalize the date-column tracker CSV."""
