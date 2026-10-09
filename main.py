@@ -434,6 +434,7 @@ if __name__ == "__main__":
         "SauceLabs":    ["Ranorex", "TestComplete"],
         "BrowserStack": ["Qase", "accessiBe"],
     }
+
     location_manager = LocationManager()
     manager = None
     vpn = None
@@ -443,26 +444,111 @@ if __name__ == "__main__":
     POST_DISCONNECT_WAIT = 3    # after disconnect, before next connect/browser
     MAX_VPN_ATTEMPTS     = 20   # per (product, comparing_product)
     # -----------------------------------------
+    # left_out = [
+    #     (product, comparing_product)
+    #     for product, comparing_products in products.items()
+    #     for comparing_product in comparing_products
+    # ]
 
+    # pairs_to_do = [
+    # (p, cp)
+    # for p, cps in products.items()
+    # for cp in cps
+    # if not Excel().check_if_completed(p, cp)
+    # ]
+    # vpn = ExpressVPN()
+    
+    # for product, comparing_product in pairs_to_do:
+    #     logger.info(f"Starting comparison for {product} and {comparing_product}")
+
+    #     pair_succeeded = False
+    #     pair_permanently_failed = False
+
+    #     for pair_attempt in range(1, MAX_VPN_ATTEMPTS + 1):
+    #         location = None
+
+    #         # --- pick & connect a VPN ---
+    #         for _ in range(MAX_VPN_ATTEMPTS):
+    #             if not location_manager.has_next():
+    #                 logger.error("No VPN locations left — aborting.")
+    #                 pair_permanently_failed = True
+    #                 break
+    #             candidate = location_manager.next()
+    #             try:
+    #                 vpn.connect(candidate)
+    #                 location = candidate
+    #                 logger.info(f"[VPN] Connected to '{candidate}'")
+    #                 break
+    #             except Exception as e:
+    #                 logger.warning(f"[VPN] '{candidate}' rejected ({e}); blacklisting.")
+    #                 location_manager.mark_failed(candidate)
+    #                 try: vpn.disconnect()
+    #                 except Exception: pass
+    #                 time.sleep(POST_DISCONNECT_WAIT)
+
+    #         if pair_permanently_failed or location is None:
+    #             break
+
+    #         time.sleep(VPN_SETTLE_WAIT)
+    #         done_browser = Excel().browser_list()
+
+    #         manager = Browser(headless=False, done_browser=done_browser)
+    #         driver, browser = manager.launch()
+    #         human_simulator = HumanSimulator(driver)
+    #         gs = GoogleSearch(driver, human_simulator)
+    #         gs.get_google()
+    #         g2_project = G2Automation(driver, human_simulator, gs)
+
+    #         try:
+    #             g2_project.run_g2(product, comparing_product, browser, location)
+    #             logger.info(f"Completed {product}/{comparing_product} via '{location}'")
+    #             location_manager.mark_success(location)
+    #             pair_succeeded = True
+
+    #         except AccessDeniedError as blocked:
+    #             # Network block → retry with a new VPN
+    #             logger.warning(
+    #                 f"[RETRY {pair_attempt}/{MAX_VPN_ATTEMPTS}] Access denied on "
+    #                 f"'{location}' for {product}/{comparing_product}: {blocked}"
+    #             )
+    #             location_manager.mark_failed(location)
+    #             pair_succeeded = False   # will retry
+
+    #         except Exception as e:
+    #             # Code/data error → do NOT retry, do NOT blame the VPN
+    #             logger.error(
+    #                 f"run_g2 failed for {product}/{comparing_product}: {e}",
+    #                 exc_info=True,
+    #             )
+    #             pair_permanently_failed = True
+    #             pair_succeeded = False
+
+    #         finally:
+    #             try: manager.quit(browser_name=browser)
+    #             except Exception: pass
+    #             try: vpn.disconnect()
+    #             except Exception: pass
+    #             time.sleep(POST_DISCONNECT_WAIT)
+
+    #         if pair_succeeded or pair_permanently_failed:
+    #             break
+    #         # otherwise loop → new VPN for the same pair
+
+    #     if not pair_succeeded:
+    #         logger.error(
+    #             f"Giving up on {product}/{comparing_product} after "
+    #             f"{MAX_VPN_ATTEMPTS} attempts."
+    #         )
+    
     try:
         vpn = ExpressVPN()
         done_browser = []
+
         for product, comparing_products in products.items():
             for comparing_product in comparing_products:
 
-                # if Excel().check_if_present(product, comparing_product):
-                #     logger.info(f"Already Done {product} and {comparing_product}")
-                #     continue
-
-                # =========================================================
-                # RESTART LOOP:
-                # Each iteration of this loop is one complete attempt for
-                # this (product, comparing_product) pair on a fresh VPN.
-                # If G2 raises AccessDeniedError anywhere in the flow, we
-                # tear down browser + VPN, blacklist the location, and
-                # come back here to try again with a new VPN.
-                # =========================================================
                 if Excel().check_if_completed(product, comparing_product):
+                    # left_out.remove((product, comparing_product))
                     logger.info(f"Already Done {product} and {comparing_product}")
                     continue 
                 
@@ -511,11 +597,13 @@ if __name__ == "__main__":
 
                     # ---- let the tunnel stabilise -------------------
                     time.sleep(VPN_SETTLE_WAIT)
-
+                    done_browser = Excel().browser_list()
+                    
+                    logger.info(f"Browsers already done: {done_browser}")
                     # ---- fresh browser per attempt ------------------
                     manager = Browser(headless=False,done_browser=done_browser)
                     driver, browser = manager.launch()
-                    done_browser.append(browser)
+                    
                     human_simulator = HumanSimulator(driver)
                     gs = GoogleSearch(driver, human_simulator)
                     gs.get_google()
@@ -534,6 +622,7 @@ if __name__ == "__main__":
                         )
                         location_manager.mark_success(location)
                         pair_done = True
+                        # left_out.remove((product, comparing_product))
 
                     except AccessDeniedError as blocked:
                         # ---- CHANGED: restart the WHOLE pair on a new VPN ----
@@ -577,7 +666,7 @@ if __name__ == "__main__":
                     if retry_needed:
                         continue   # loop back, pick a new VPN, restart pair
 
-                # ---- end of pair_attempt loop -----------------------
+                    # ---- end of pair_attempt loop -----------------------
 
     except Exception:
         logger.error(traceback.format_exc())

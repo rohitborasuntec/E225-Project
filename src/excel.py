@@ -46,7 +46,19 @@ class Excel:
             return False
 
         return True
+    
+    def browser_list(self):
+        if not os.path.exists(self.file_name):
+            return []
 
+        existing = pd.read_excel(self.file_name)
+
+        completed_data = existing[(existing["Date"] == self.date) & (existing["Time"] == self.period) & (existing["Status"] == "Done")]
+        
+        if completed_data.empty:
+            return []
+
+        return completed_data["Browser Name"].unique().tolist()
         
     def save_excel(self, row=None, df=None):
         if row is not None:

@@ -75,22 +75,25 @@ def get_random_word_or_sentence_faker(option):
     curr_yr = datetime.now().year
     year = randint(1950, curr_yr)
     if option == 'word':
-        return f"{fake.word()} meaning"
+        element = ["meaning","adjective","noun","verb","adverb","pronoun","preposition","conjunction","interjection"]
+        return f"{fake.word()} {random.choice(element)}"
     if option == 'name':
         return fake.name()
     if option == 'country':
-        return f"current gdp of {fake.country()}?"
+        element = ["gdp", "population", "capital", "currency", "flag"," language","religion"," climate","tourist attractions"]
+        return f"{random.choice(element)} of {fake.country()}?"
     if option == 'movie':
-        return f"movies released in {year}"
+        return f"must watch movies {year}"
     if option == 'music':
-        return f"top songs of {year}"
+        return f"latest playlist for {year}"
     if option == 'sports':
-        sports = ["cricket", "football", ""]
-        return f"{random.choice(sports)} live score"
+        sports = ["cricket", "football", "","basketball", "tennis", "hockey", "baseball", "golf", "rugby", "volleyball"]
+        return f"{random.choice(sports)} match live score"
     if option == 'technology':
-        return f"top techonlogies build in {year}"
+        element = ["latest gadgets", "tech news", "AI advancements", "software updates", "hardware reviews"]
+        return f"{random.choice(element)} in {year}"
     if option == 'News':
-        return f"current news of {fake.city()}"
+        return f"{fake.city()} news"
     return option
 
 

@@ -1115,7 +1115,7 @@ class G2Page:
             result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
                 # breakpoint()
-                save_html(self.driver.page_source, f"G2_{self.product}")
+                save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
                 logger.error(f"Could not find the exact Google result: {self.target_text}")
                 raise RuntimeError(
                     f"Could not find the exact Google result: {self.target_text}"
@@ -1161,7 +1161,7 @@ class G2Page:
                 self.driver.refresh()
                 time.sleep(randint(3, 5))
             else:
-                save_html(self.driver.page_source, "G2_SauceLabs")
+                save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
                 logger.error(f"G2 {self.product} page is still Access Denied "
                              "after 5 refreshes")
                 raise AccessDeniedError(
@@ -1170,7 +1170,8 @@ class G2Page:
             # --------------------------------------------------------------------
 
 
-            save_html(self.driver.page_source, "G2_SauceLabs")
+            save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
+            
 
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
@@ -1394,7 +1395,7 @@ class G2BrowserStack(G2Page):
             self.wait_for_g2_result(timeout=18)
         logger.info(f"Opened result: {self.driver.current_url}")
 
-        save_html(self.driver.page_source, "G2_BrowserStack")
+        save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
         self.close_login_modal_if_present(timeout=0.4)
         BrowserStackReviewsProductDetails(
             self.driver, self.human_simulator

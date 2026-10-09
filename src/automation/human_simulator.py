@@ -2,6 +2,7 @@ import random
 import time
 import math
 import re
+import datetime
 import numpy as np
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
@@ -45,8 +46,9 @@ class HumanSimulator:
         the correct viewport->screen coordinate mapping for your browser.
         """
         self.driver = driver
-        self.current_x = 0
-        self.current_y = 0
+        # NEW: start cursor somewhere natural instead of (0,0)
+        self.current_x = random.randint(200, 1000)
+        self.current_y = random.randint(150, 600)
         self.use_native_cursor = use_native_cursor
         self.pyautogui = None
         self.verbose = verbose
@@ -55,6 +57,13 @@ class HumanSimulator:
         # Overwritten by calibrate_screen_offset(). 85 is a rough default
         # for a typical Chrome on a 1080p display.
         self._toolbar_offset = 85
+
+        # NEW: session-level fatigue / time-of-day / pacing state
+        self._session_start = time.time()
+        self._fatigue_factor = 1.0        # grows slowly over the session
+        self._micro_pause_chance = 0.08   # chance of a mid-action pause
+        self._last_action_time = time.time()
+        self._tod_factor = self._compute_tod_factor()
 
         if use_native_cursor:
             try:
@@ -77,6 +86,47 @@ class HumanSimulator:
         if verbose:
             mode = "native OS cursor" if self.use_native_cursor else "Selenium synthetic cursor"
             print(f"[HumanSimulator] Input mode: {mode}")
+
+    # ==================================================================
+    # NEW: TIME-OF-DAY PACING
+    # ==================================================================
+    @staticmethod
+    def _compute_tod_factor():
+        """Humans are slower at night / early morning, sharper midday."""
+        hour = datetime.datetime.now().hour
+        if 0 <= hour < 6:
+            return 1.18   # sleepy
+        elif 6 <= hour < 10:
+            return 1.08   # waking up
+        elif 10 <= hour < 16:
+            return 0.97   # sharp
+        elif 16 <= hour < 20:
+            return 1.02
+        else:
+            return 1.12   # evening
+
+    # ==================================================================
+    # NEW: FATIGUE / MICRO-PAUSE / ACTION-GAP HELPERS
+    # ==================================================================
+    def _update_fatigue(self):
+        """Real users slow down as they get tired."""
+        minutes_elapsed = (time.time() - self._session_start) / 60
+        # Up to +35% slower after 10 minutes
+        self._fatigue_factor = min(1.35, 1.0 + minutes_elapsed * 0.035)
+
+    def _maybe_micro_pause(self):
+        """Occasionally pause mid-action like a distracted human."""
+        if random.random() < self._micro_pause_chance:
+            pause = self._gauss(0.6, 0.25, 0.2, 1.6)
+            time.sleep(pause)
+
+    def _inter_action_gap(self):
+        """Natural gap between two distinct actions (click -> scroll)."""
+        now = time.time()
+        since_last = now - self._last_action_time
+        self._last_action_time = now
+        if since_last < 0.5:
+            time.sleep(self._gauss(0.35, 0.12, 0.1, 0.8))
 
     # ==================================================================
     # CALIBRATION - compute the viewport->screen offset once
@@ -168,45 +218,129 @@ class HumanSimulator:
     def _ease_in_out(self, t):
         return t * t * (3 - 2 * t)
 
+    # ==================================================================
+    # NEW: HUMAN MOUSE PATH (tremor + overshoot + correction + hesitation)
+    # ==================================================================
+    def _human_mouse_path(self, start, end, steps=40):
+        """
+        Generate a human-like path with:
+          - Bézier base
+          - Tremor (small sinusoidal noise, decays toward target)
+          - Occasional overshoot + correction
+          - Occasional hesitation point
+        """
+        x0, y0 = start
+        x1, y1 = end
+        dist = math.hypot(x1 - x0, y1 - y0)
+
+        # Base Bézier
+        path = self._bezier_curve(
+            start, end,
+            control_points=int(self._gauss(2, 0.6, 1, 3)),
+            steps=steps,
+        )
+
+        # Overshoot ~30% of the time (real humans do this on longer moves)
+        if dist > 120 and random.random() < 0.30:
+            overshoot_amount = self._gauss(8, 4, 2, 20)
+            dx = (x1 - x0) / max(dist, 1)
+            dy = (y1 - y0) / max(dist, 1)
+            overshoot_point = (
+                x1 + dx * overshoot_amount,
+                y1 + dy * overshoot_amount,
+            )
+            path.extend(
+                self._bezier_curve(
+                    path[-1], overshoot_point,
+                    control_points=1,
+                    steps=max(4, int(overshoot_amount)),
+                )
+            )
+            path.extend(
+                self._bezier_curve(
+                    path[-1], end,
+                    control_points=1,
+                    steps=max(4, int(overshoot_amount)),
+                )
+            )
+
+        # Tremor (hand shake), decays toward the target
+        tremored = []
+        phase = random.uniform(0, 2 * math.pi)
+        for i, (x, y) in enumerate(path):
+            t = i / max(len(path) - 1, 1)
+            tremor = (1 - t) * self._gauss(0, 0.9, -3, 3)
+            tx = x + tremor * math.cos(phase + t * 6)
+            ty = y + tremor * math.sin(phase + t * 6)
+            tremored.append((tx, ty))
+
+        # Occasional hesitation point
+        if random.random() < 0.25 and len(tremored) > 6:
+            idx = random.randint(2, len(tremored) - 3)
+            hx, hy = tremored[idx]
+            tremored.insert(
+                idx + 1,
+                (hx + random.uniform(-1.5, 1.5),
+                 hy + random.uniform(-1.5, 1.5)),
+            )
+
+        return tremored
+
+    # ---------- Dynamic delays (now with fatigue + time-of-day) ----------
     def _dynamic_move_delay(self, distance, steps):
+        self._update_fatigue()
         total_duration = self._gauss(
-            (0.22 + distance * 0.0008) * GLOBAL_PACE_MULTIPLIER,
+            (0.22 + distance * 0.0008) * GLOBAL_PACE_MULTIPLIER
+            * self._fatigue_factor * self._tod_factor,
             0.07, 0.15, 2.2,
         )
         per_step_mean = total_duration / max(steps, 1)
         return per_step_mean, per_step_mean * 0.3
 
     def _dynamic_click_delay(self):
+        self._update_fatigue()
         return self._gauss(
-            0.18 * GLOBAL_PACE_MULTIPLIER, 0.06, 0.05, 0.45
+            0.18 * GLOBAL_PACE_MULTIPLIER
+            * self._fatigue_factor * self._tod_factor,
+            0.06, 0.05, 0.45,
         )
 
     def _dynamic_hover_time(self, element=None):
-        base_mean = 1.6 * GLOBAL_PACE_MULTIPLIER
+        self._update_fatigue()
+        base_mean = 1.6 * GLOBAL_PACE_MULTIPLIER * self._tod_factor
         if element is not None:
             try:
                 area = element.size["width"] * element.size["height"]
                 base_mean = min(
-                    (1.4 + area / 45000) * GLOBAL_PACE_MULTIPLIER, 4.0
+                    (1.4 + area / 45000)
+                    * GLOBAL_PACE_MULTIPLIER
+                    * self._fatigue_factor * self._tod_factor,
+                    4.0,
                 )
             except Exception:
                 pass
         return self._gauss(base_mean, base_mean * 0.3, 0.6, 5.5)
 
     def _dynamic_typing_delay(self, char=None):
-        base_mean = 0.16 * GLOBAL_PACE_MULTIPLIER
+        self._update_fatigue()
+        base_mean = 0.16 * GLOBAL_PACE_MULTIPLIER * self._fatigue_factor
         if char in (" ", ",", ".", "!", "?"):
             base_mean += 0.06
         return self._gauss(base_mean, 0.06, 0.05, 0.55)
 
     def _dynamic_think_pause(self):
+        self._update_fatigue()
         return self._gauss(
-            0.75 * GLOBAL_PACE_MULTIPLIER, 0.2, 0.35, 1.8
+            0.75 * GLOBAL_PACE_MULTIPLIER * self._fatigue_factor,
+            0.2, 0.35, 1.8,
         )
 
     def _dynamic_scroll_step_delay(self):
+        self._update_fatigue()
         return self._gauss(
-            0.4 * GLOBAL_PACE_MULTIPLIER, 0.12, 0.15, 0.9
+            0.4 * GLOBAL_PACE_MULTIPLIER
+            * self._fatigue_factor * self._tod_factor,
+            0.12, 0.15, 0.9,
         )
 
     def _dynamic_scroll_amount(self, remaining):
@@ -216,13 +350,17 @@ class HumanSimulator:
         )
 
     def _dynamic_idle_pause(self):
+        self._update_fatigue()
         return self._gauss(
-            1.4 * GLOBAL_PACE_MULTIPLIER, 0.45, 0.4, 3.0
+            1.4 * GLOBAL_PACE_MULTIPLIER * self._fatigue_factor,
+            0.45, 0.4, 3.0,
         )
 
     def _dynamic_drift_delay(self):
+        self._update_fatigue()
         return self._gauss(
-            0.35 * GLOBAL_PACE_MULTIPLIER, 0.1, 0.1, 0.7
+            0.35 * GLOBAL_PACE_MULTIPLIER * self._fatigue_factor,
+            0.1, 0.1, 0.7,
         )
 
     # ---------- Scroll position helpers ----------
@@ -294,7 +432,7 @@ class HumanSimulator:
             return False
 
     # ==================================================================
-    # PRIMARY MOUSE MOVE
+    # PRIMARY MOUSE MOVE  (CHANGED: uses _human_mouse_path + fatigue)
     # ==================================================================
     def move_to_element_like_human(
         self, element, steps=None, step_delay=None, verify=True
@@ -312,10 +450,9 @@ class HumanSimulator:
         distance = math.hypot(end_x - start[0], end_y - start[1])
 
         steps = steps if steps is not None else int(self._gauss(30, 6, 15, 60))
-        control_points = int(self._gauss(2, 0.7, 1, 3))
-        path = self._bezier_curve(
-            start, end, control_points=control_points, steps=steps
-        )
+
+        # CHANGED: use the tremor + overshoot aware path
+        path = self._human_mouse_path(start, end, steps=steps)
 
         if step_delay is None:
             delay_mean, delay_stdev = self._dynamic_move_delay(distance, steps)
@@ -326,7 +463,8 @@ class HumanSimulator:
             # ---------- NATIVE (visible) cursor path ----------
             win_pos = self.driver.get_window_position()
             for i, (x, y) in enumerate(path):
-                t = self._ease_in_out(i / max(len(path) - 1, 1))
+                t = i / max(len(path) - 1, 1)
+                eased = self._ease_in_out(t)
                 jitter_x = self._gauss(0, 0.6, -2, 2)
                 jitter_y = self._gauss(0, 0.6, -2, 2)
                 sx = win_pos["x"] + x + jitter_x
@@ -341,8 +479,11 @@ class HumanSimulator:
                     self.use_native_cursor = False
                     self.pyautogui = None
                     break
-                step_time = delay_mean * (1.5 - abs(0.5 - t))
-                time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
+                # CHANGED: human acceleration profile + fatigue
+                step_time = delay_mean * (0.6 + 0.8 * (1 - abs(0.5 - eased)))
+                step_time *= self._fatigue_factor
+                jittered = self._gauss(step_time, step_time * 0.25, 0.001, None)
+                time.sleep(jittered)
             self.current_x, self.current_y = path[-1]
         else:
             # ---------- SYNTHETIC (invisible) path ----------
@@ -428,6 +569,47 @@ class HumanSimulator:
                 [self.scroll_page, self._idle_pause, self._random_drift]
             )
             action()
+
+    # ==================================================================
+    # NEW: HUMAN TYPING (bursts, typos, corrections, look-aways)
+    # ==================================================================
+    def _human_type_text(self, element, text):
+        """Type with realistic burst patterns, corrections, and pauses."""
+        i = 0
+        while i < len(text):
+            # Burst typing: 2-5 chars fast
+            burst = random.randint(2, 5)
+            for _ in range(burst):
+                if i >= len(text):
+                    break
+                char = text[i]
+
+                # 3% chance to type a wrong char then backspace-correct
+                if random.random() < 0.03 and char.isalpha():
+                    wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
+                    element.send_keys(wrong)
+                    time.sleep(self._gauss(0.08, 0.03, 0.03, 0.18))
+                    element.send_keys(Keys.BACKSPACE)
+                    time.sleep(self._gauss(0.1, 0.03, 0.04, 0.2))
+
+                element.send_keys(char)
+                i += 1
+
+                # Per-char delay, faster inside a burst
+                base = self._gauss(0.09, 0.03, 0.04, 0.22) * self._fatigue_factor
+                if char in " ,.?!;:":
+                    base += random.uniform(0.08, 0.18)
+                time.sleep(base)
+
+            # Pause between bursts (thinking / reading)
+            if random.random() < 0.35:
+                time.sleep(self._gauss(0.55, 0.25, 0.15, 1.4))
+            else:
+                time.sleep(self._gauss(0.18, 0.06, 0.05, 0.4))
+
+            # 5% chance to look away briefly
+            if random.random() < 0.05:
+                self._random_drift()
 
     def input_search_query(
         self,
@@ -552,44 +734,8 @@ class HumanSimulator:
         search_box.clear()
         logger.info(f"Query Used {input_query}")
 
-        typo_positions = set()
-        words = list(re.finditer(r"[A-Za-z]+", input_query))
-        selected_word = random.choice(words + [None]) if words else None
-
-        if selected_word is not None:
-            typo_positions.add(
-                random.randrange(selected_word.start(), selected_word.end())
-            )
-
-        alphabet = "abcdefghijklmnopqrstuvwxyz"
-        logger.info(f"Typing with {len(typo_positions)} spelling mistakes")
-
-        for index, char in enumerate(input_query):
-            if index in typo_positions:
-                wrong_char = random.choice(
-                    [letter for letter in alphabet if letter != char.lower()]
-                )
-                search_box.send_keys(
-                    wrong_char.upper() if char.isupper() else wrong_char
-                )
-            else:
-                search_box.send_keys(char)
-            delay = (
-                char_delay
-                if char_delay is not None
-                else self._gauss(
-                    0.24 if char not in (" ", ",", ".", "!", "?") else 0.38,
-                    0.07, 0.12, 0.5,
-                )
-            )
-            time.sleep(delay)
-            if random.random() < 0.03:
-                pause = (
-                    think_pause
-                    if think_pause is not None
-                    else self._dynamic_think_pause()
-                )
-                time.sleep(pause)
+        # CHANGED: use _human_type_text for realistic bursts + corrections
+        self._human_type_text(search_box, input_query)
 
         if suggestion:
             query_used = click_suggestion_box(search_box)
@@ -603,22 +749,40 @@ class HumanSimulator:
         )
         time.sleep(final_pause)
         search_box.clear()
-        for char in input_query:
-            search_box.send_keys(char)
-            time.sleep(self._gauss(0.18, 0.05, 0.09, 0.35))
+        # CHANGED: second pass also uses human typing
+        self._human_type_text(search_box, input_query)
         self.mouse_click(search_box)
         search_box.submit()
         return input_query
 
+    # ==================================================================
+    # CHANGED: mouse_click with pre-click scanning + rare miss-click
+    # ==================================================================
     def mouse_click(self, element, click_delay=None):
         """Move the cursor onto element, then click (with fallbacks)."""
         self.move_to_element_like_human(element)
+        self._inter_action_gap()
+
+        # Real users often "scan" the element before clicking
+        if random.random() < 0.65:
+            time.sleep(self._gauss(0.55, 0.25, 0.15, 1.3))
+
+        # Occasional wrong-click then correct (very human)
+        if random.random() < 0.03:
+            rect = self._get_viewport_rect(element)
+            off_x = rect["x"] + random.uniform(2, 6)
+            off_y = rect["y"] + random.uniform(2, 6)
+            self.current_x, self.current_y = off_x, off_y
+            time.sleep(0.2)
+            self.move_to_element_like_human(element)
+
         delay = (
             click_delay
             if click_delay is not None
             else self._dynamic_click_delay()
         )
         time.sleep(delay)
+        self._maybe_micro_pause()
 
         if self.use_native_cursor:
             try:
@@ -640,10 +804,45 @@ class HumanSimulator:
         )
         time.sleep(duration)
 
+    # ==================================================================
+    # NEW: INERTIAL SCROLL (flick + decaying drift + reading pause)
+    # ==================================================================
+    def _inertial_scroll(self, direction="down"):
+        """One human-like scroll gesture: quick flick + drift."""
+        # Initial flick
+        flick = random.randint(180, 420)
+        signed = flick if direction == "down" else -flick
+        self.driver.execute_script(
+            "window.scrollBy({top: arguments[0], behavior: 'auto'});", signed
+        )
+        time.sleep(self._gauss(0.06, 0.02, 0.03, 0.15))
+
+        # Inertial drift (smaller, decaying)
+        drift = flick
+        while drift > 25:
+            drift *= random.uniform(0.35, 0.55)
+            signed = int(drift) if direction == "down" else -int(drift)
+            if signed == 0:
+                break
+            self.driver.execute_script(
+                "window.scrollBy({top: arguments[0], behavior: 'auto'});", signed
+            )
+            time.sleep(self._gauss(0.05, 0.02, 0.02, 0.12))
+
+        # Reading pause after scroll
+        time.sleep(self._gauss(0.5, 0.25, 0.15, 1.2) * self._fatigue_factor)
+
+    # ==================================================================
+    # CHANGED: scroll_page now sometimes uses _inertial_scroll
+    # ==================================================================
     def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
+        # 40% of the time, do a single inertial flick instead
+        if total_scroll is None and random.random() < 0.4:
+            return self._inertial_scroll(direction or "down")
+
         total_scroll = (
             total_scroll if total_scroll is not None
-            else int(self._gauss(450, 140, 150, 900))   # was 700/200/1400
+            else int(self._gauss(450, 140, 150, 900))
         )
 
         current_direction = direction or random.choice(["down", "down", "up"])
@@ -679,7 +878,6 @@ class HumanSimulator:
 
             if self.use_native_cursor:
                 try:
-                    # pyautogui: + = up, - = down.  signed_step: + = down.
                     self.pyautogui.moveTo(cx, cy, duration=0.15)
                     self.pyautogui.scroll(-signed_step)
                 except Exception as e:
@@ -707,10 +905,6 @@ class HumanSimulator:
     # ==================================================================
     # PAGE EXPLORATION HELPERS
     # ==================================================================
-    # def bring_element_into_view_with_wheel(self, element):
-    #     """Scroll element into view (JS scrollIntoView is fine here)."""
-    #     self._scroll_element_into_view(element)
-
     def bring_element_into_view_with_wheel(self, element, align="center",
                                             max_iterations=6, settle=True):
         """
@@ -726,7 +920,6 @@ class HumanSimulator:
         if element is None:
             return False
 
-        # Where do we want the element to sit vertically in the viewport?
         if align == "start":
             target_ratio = random.uniform(0.15, 0.28)
         elif align == "end":
@@ -741,62 +934,46 @@ class HumanSimulator:
             top, bottom, height = rect
             _, vh, _ = self._viewport_state()
 
-            # Already comfortably in view? Add a small pause so it doesn't
-            # feel instantaneous, then bail out.
             if (top >= 60 and bottom <= vh - 60):
                 if settle:
                     time.sleep(self._gauss(0.25, 0.08, 0.1, 0.5))
                 return True
 
-            # Compute the delta needed to land the element at target_ratio.
             target_top = vh * target_ratio
-            # Aim for the element's vertical centre at the target line.
             element_center = top + height / 2.0
-            delta = element_center - target_top        # + = need to scroll down
+            delta = element_center - target_top
 
-            # If the element is far away, cap per-iteration distance so the
-            # wheel motion stays human (roughly one viewport at a time).
             max_step = vh * random.uniform(0.75, 1.05)
             if abs(delta) > max_step:
                 delta = math.copysign(max_step, delta)
 
-            # --- break the delta into small, uneven wheel chunks -----------
             chunks = self._plan_wheel_chunks(abs(delta), vh)
             direction = "down" if delta > 0 else "up"
 
-            # Small chance to overshoot then correct — very human.
             overshoot = 0
             if random.random() < 0.22 and abs(delta) > vh * 0.4:
                 overshoot = int(abs(self._gauss(vh * 0.06, vh * 0.03,
                                                 0, vh * 0.15)))
 
-            for chunk in chunks:
-                step = chunk + (overshoot if chunks.index(chunk) == len(chunks) - 1
-                                else 0)
+            for idx, chunk in enumerate(chunks):
+                step = chunk + (overshoot if idx == len(chunks) - 1 else 0)
                 self._wheel_scroll(step, direction)
-                # Per-chunk delay: shorter for small chunks, longer for big.
                 base = 0.18 + (step / max(vh, 1)) * 0.35
-                time.sleep(self._gauss(base * GLOBAL_PACE_MULTIPLIER,
+                time.sleep(self._gauss(base * GLOBAL_PACE_MULTIPLIER
+                                        * self._fatigue_factor,
                                         base * 0.25,
                                         0.06, 1.2))
-                # Occasional micro-pause, like a reader scanning.
                 if random.random() < 0.18:
                     time.sleep(self._gauss(0.4, 0.15, 0.15, 0.9))
 
-            # Undo any overshoot with a short reversed wheel burst.
             if overshoot:
                 back = int(overshoot * random.uniform(0.6, 1.0))
                 self._wheel_scroll(back, "up" if direction == "down" else "down")
                 time.sleep(self._gauss(0.25, 0.08, 0.1, 0.5))
 
-            # Give smooth-scrolling pages a moment to actually settle before
-            # we re-measure. Re-measure loop handles pages that keep loading.
             if settle:
                 time.sleep(self._gauss(0.35, 0.12, 0.15, 0.7))
 
-        # Last-resort: we tried hard, still not settled — do a gentle
-        # JS scroll (still with instant behavior disabled where possible)
-        # so callers don't get stuck forever.
         logger.debug(
             "bring_element_into_view_with_wheel: giving up after "
             f"{max_iterations} wheel iterations; using JS fallback."
@@ -813,25 +990,16 @@ class HumanSimulator:
             pass
         return False
 
-
     # ----------------------------------------------------------------------
     # Wheel helpers
     # ----------------------------------------------------------------------
     def _wheel_scroll(self, distance, direction):
-        """
-        Emit one burst of wheel scrolling of `distance` px in `direction`.
-        Uses the native cursor when available, else dispatches a wheel event
-        on the document so the page still sees realistic input.
-        """
         if distance <= 0:
             return
         signed = -distance if direction == "down" else distance
-        # pyautogui.scroll: + = up, - = down.
 
         if self.use_native_cursor and self.pyautogui is not None:
             try:
-                # Park the cursor somewhere natural first — wheels don't fire
-                # from nowhere. Reuse last known position, nudged slightly.
                 jitter_x = self._gauss(0, 6, -15, 15)
                 jitter_y = self._gauss(0, 6, -15, 15)
                 sx, sy = self._apply_screen_offset(
@@ -846,8 +1014,6 @@ class HumanSimulator:
             except Exception as e:
                 logger.debug(f"pyautogui.scroll failed: {e}; using JS wheel event")
 
-        # Synthetic wheel event — many modern sites read wheel events even
-        # when the browser is headless / cursor is not native.
         try:
             self.driver.execute_script(
                 "window.dispatchEvent(new WheelEvent('wheel', {"
@@ -856,28 +1022,19 @@ class HumanSimulator:
                 signed,
             )
         except Exception:
-            # Absolute fallback: programmatic scrollBy.
             self.driver.execute_script(
                 "window.scrollBy({top: arguments[0], left: 0, behavior: 'smooth'});",
                 -signed if direction == "down" else -signed,
             )
 
-
     def _plan_wheel_chunks(self, total_distance, viewport_height):
-        """
-        Split a total wheel distance into several small, uneven chunks that
-        roughly follow a human ramp-up / ramp-down profile.
-        """
         if total_distance <= 0:
             return []
 
-        # Target chunk size scales with viewport but stays modest.
         base_chunk = max(40, min(viewport_height * 0.18, 140))
         n = max(2, int(total_distance / base_chunk))
-        n = min(n, 10)   # never too many tiny bursts — looks robotic
+        n = min(n, 10)
 
-        # Build weights from a smooth bell-ish curve so middle chunks are
-        # larger and the ends are smaller (like a real wrist flick).
         weights = []
         for i in range(n):
             x = (i + 0.5) / n
@@ -898,10 +1055,7 @@ class HumanSimulator:
                 break
         return chunks
 
-
     def mouse_click_after_hover(self, element):
-        """Click an element that was already hovered. Uses native click
-        when available, with the same fallback chain as mouse_click."""
         time.sleep(self._gauss(0.4, 0.12, 0.2, 0.7))
         if self.use_native_cursor:
             try:
@@ -914,10 +1068,6 @@ class HumanSimulator:
         self._safe_element_click(element)
 
     def move_mouse_around(self, moves=3):
-        """
-        Move the cursor through a few random viewport positions.
-        Uses the real OS cursor in native mode.
-        """
         width, height = self.driver.execute_script(
             "return [window.innerWidth, window.innerHeight];"
         )
@@ -928,7 +1078,6 @@ class HumanSimulator:
             y = random.randint(round(height * 0.25), round(height * 0.75))
 
             if self.use_native_cursor:
-                # Animate with intermediate points for a natural sweep
                 cur_x, cur_y = self.current_x, self.current_y
                 steps = random.randint(8, 16)
                 for i in range(1, steps + 1):
@@ -979,7 +1128,6 @@ class HumanSimulator:
         ) or []
 
     def select_random_words(self, count, already_selected=None):
-        """Select distinct visible words with the mouse (hover + JS Range)."""
         selected = []
         seen = {word.lower() for word in (already_selected or [])}
 
@@ -1024,7 +1172,6 @@ class HumanSimulator:
         return selected
 
     def select_text_once(self):
-        """Select one visible phrase containing 4 or 10-20 words."""
         word_count = random.choice([4, random.randint(10, 20)])
         elements = self._visible_reading_elements()
         random.shuffle(elements)
@@ -1099,10 +1246,13 @@ class HumanSimulator:
     # ==================================================================
     def _viewport_state(self):
         try:
-            return self.driver.execute_script(
+            result = self.driver.execute_script(
                 "return [window.pageYOffset, window.innerHeight, "
                 "document.body.scrollHeight];"
             )
+            if not result or len(result) != 3:
+                return 0, 800, 0
+            return result
         except Exception:
             return 0, 800, 0
 
@@ -1150,11 +1300,6 @@ class HumanSimulator:
         return signature in self._recent_signatures if signature else False
 
     def resolve_random_element(self, xpath_pool, category_weights=None):
-        """
-        xpath_pool: {category: [xpath, xpath, ...]}
-        category_weights: {category: weight}
-        Returns (category, element) or (None, None).
-        """
         if not isinstance(xpath_pool, dict):
             logger.warning(
                 "resolve_random_element: xpath_pool must be a dict; "
@@ -1317,7 +1462,7 @@ class HumanSimulator:
 
     def random_glance_scroll(self):
         direction = random.choice(["up", "down"])
-        distance = int(abs(random.gauss(140, 55)))   # was 180/70
+        distance = int(abs(random.gauss(140, 55)))
         scroll_y, vh, page_h = self._viewport_state()
         max_scroll = max(0, page_h - vh)
 
@@ -1360,7 +1505,6 @@ class HumanSimulator:
             pass
 
     def select_text_in_element(self, element, max_chars=180):
-        """Select a random sub-range inside element (JS Range)."""
         try:
             ok = self.driver.execute_script(
                 """
@@ -1432,7 +1576,7 @@ class HumanSimulator:
         self, element, category, dwell_config=None, default_dwell=None
     ):
         cfg = dwell_config or {}
-        default = default_dwell or (3.5, 6.5)   # was 2.5, 5.0
+        default = default_dwell or (3.5, 6.5)
         value = cfg.get(category, default) if isinstance(cfg, dict) else default
         if (
             not isinstance(value, (list, tuple))
@@ -1449,6 +1593,8 @@ class HumanSimulator:
             min_d, max_d = max_d, min_d
 
         dwell = random.uniform(min_d, max_d)
+        # NEW: fatigue makes dwells longer
+        dwell *= self._fatigue_factor
 
         logger.debug(f"Dwell [{category}] {round(dwell, 2)}s")
 
@@ -1462,7 +1608,6 @@ class HumanSimulator:
                 self.hover_jitter()
                 next_jitter = now + random.uniform(1.0, 2.0)
 
-            # fewer micro-scrolls inside dwell
             if random.random() < 0.05:
                 nudge = int(abs(random.gauss(30, 15)))
                 direction = random.choice(["up", "down"])
@@ -1470,11 +1615,42 @@ class HumanSimulator:
                     total_scroll=nudge, direction=direction
                 )
 
-            # a bit more text selection
             if random.random() < 0.08:
                 self.select_text_in_element(element)
 
             time.sleep(random.uniform(0.25, 0.55))
+
+    # ==================================================================
+    # NEW: DISTRACTION BEHAVIOR
+    # ==================================================================
+    def _simulate_distraction(self):
+        """Random behavior that mimics a user being distracted."""
+        roll = random.random()
+        try:
+            if roll < 0.35:
+                # Scroll up sharply (re-reading something)
+                self.scroll_page(
+                    total_scroll=random.randint(300, 900),
+                    direction="up",
+                )
+            elif roll < 0.65:
+                # Long idle pause
+                time.sleep(self._gauss(4.5, 1.5, 2.0, 9.0))
+            elif roll < 0.85:
+                # Random mouse wander
+                self.move_mouse_around(moves=random.randint(2, 5))
+            else:
+                # Tiny window nudge (very rare)
+                try:
+                    pos = self.driver.get_window_position()
+                    self.driver.set_window_position(
+                        pos["x"] + random.randint(-3, 3),
+                        pos["y"] + random.randint(-3, 3),
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def browse_page_randomly(
         self,
@@ -1501,6 +1677,8 @@ class HumanSimulator:
             logger.warning("browse_page_randomly: empty pool; skipping.")
             return {"empty": 1}
 
+        self._update_fatigue()
+
         xpath_pool = pool["xpaths"]
         weights = pool.get("weights") or {}
 
@@ -1526,7 +1704,7 @@ class HumanSimulator:
         else:
             dwell_cfg = {}
 
-        default_d = pool.get("default_dwell") or (3.5, 6.5)   # longer dwell
+        default_d = pool.get("default_dwell") or (3.5, 6.5)
         if (
             not isinstance(default_d, (list, tuple))
             or len(default_d) != 2
@@ -1564,13 +1742,14 @@ class HumanSimulator:
             "glance": 0, "select": 0, "no_scroll": 0,
             "empty": 0, "dwell": 0, "idle": 0, "drift": 0,
             "budget_exhausted": 0,
+            "distraction": 0,       # NEW
         }
 
         while time_available(2.0):
             # ---------------- SCROLL PHASE ----------------
             do_scroll = (
                 scroll_budget_left() > 0
-                and random.random() < 0.55     # even less eager to scroll
+                and random.random() < 0.55
             )
 
             if do_scroll:
@@ -1623,14 +1802,12 @@ class HumanSimulator:
 
             else:
                 # ---------------- NON-SCROLL PHASE ----------------
-                # Pick any currently visible element without moving the page.
                 category, element = self.resolve_random_element(
                     xpath_pool, weights
                 )
                 if element is None:
                     if scroll_budget_left() > 0 and random.random() < 0.4:
-                        continue    # fall through to scroll next loop
-                    # No element and no scroll allowed -> idle / drift
+                        continue
                     if random.random() < 0.5:
                         self._idle_pause()
                         action_log["idle"] += 1
@@ -1651,7 +1828,6 @@ class HumanSimulator:
                 action_log["hover"] += 1
                 logger.debug(f"Hovered [{category}]")
 
-            # Extra drift to break the rhythm
             if random.random() < 0.35:
                 self._random_drift()
                 action_log["drift"] += 1
@@ -1661,13 +1837,13 @@ class HumanSimulator:
 
             roll = random.random()
             try:
-                if category in safe_clicks and roll < 0.55:      # was 0.7
+                if category in safe_clicks and roll < 0.55:
                     if self.safe_click(element):
                         action_log["click"] += 1
 
                 elif category in (
                     "review_cards", "review_body"
-                ) and roll < 0.65:                                  # was 0.55
+                ) and roll < 0.65:
                     if self.select_text_in_element(element):
                         action_log["select"] += 1
 
@@ -1705,10 +1881,15 @@ class HumanSimulator:
                 )
                 action_log["dwell"] += 1
 
+            # ---------------- NEW: DISTRACTION ----------------
+            if random.random() < 0.05 and time_available(6):
+                self._simulate_distraction()
+                action_log["distraction"] += 1
+
             # ---------------- GLANCE SCROLL (budget-gated) ----------------
             if (
                 scroll_budget_left() > 0
-                and random.random() < 0.15                       # was 0.22
+                and random.random() < 0.15
                 and time_available(2)
             ):
                 gs = time.time()
@@ -1716,7 +1897,6 @@ class HumanSimulator:
                     action_log["glance"] += 1
                 scroll_time_spent += time.time() - gs
             elif scroll_budget_left() <= 0 and random.random() < 0.25:
-                # Filler activity once scrolling is done
                 if random.random() < 0.5:
                     self._idle_pause()
                     action_log["idle"] += 1

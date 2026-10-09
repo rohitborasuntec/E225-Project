@@ -44,6 +44,7 @@ import time
 from functools import lru_cache
 from pathlib import Path
 
+from httpx import options
 import undetected_chromedriver as uc
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -191,10 +192,11 @@ class Browser:
     SUPPORTED = ["Chrome", "Brave", "Opera", "Edge", "Firefox"]
 
     _WINDOW_SIZES = [
-        (1366, 768),
+        # (1366, 768),
         (1440, 900),
-        (1536, 864),
-        (1600, 900),
+        # (1536, 864),
+        # (1600, 900),
+        (1920, 1080),
     ]
 
     # Optional override for the Firefox install directory, used by
@@ -287,7 +289,8 @@ class Browser:
         options.add_argument("--disable-backgrounding-occluded-windows")
         options.add_argument("--disable-renderer-backgrounding")
         options.add_argument("--disable-background-timer-throttling")
-
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-software-rasterizer")
         if self.user_agent:
             options.add_argument(f"--user-agent={self.user_agent}")
 
@@ -472,6 +475,28 @@ class Browser:
 
     # ---------------- chrome / brave ---------------- #
 
+    @staticmethod
+    def _start_uc(kwargs: dict):
+        """Start uc.Chrome; on a driver/browser version mismatch, retry
+        once with the browser's real major version parsed from the error."""
+        try:
+            return uc.Chrome(**kwargs)
+        except Exception as exc:
+            m = re.search(r"Current browser version is (\d+)", str(exc))
+            if not m or kwargs.get("version_main") == int(m.group(1)):
+                raise
+            major = int(m.group(1))
+            print(f"[uc] Driver/browser mismatch, retrying with version_main={major}")
+            # UC options objects can't be reused after a failed start
+            kwargs = {**kwargs, "version_main": major}
+            opts = kwargs["options"]
+            fresh = uc.ChromeOptions()
+            fresh.binary_location = opts.binary_location
+            for arg in opts.arguments:
+                fresh.add_argument(arg)
+            kwargs["options"] = fresh
+            return uc.Chrome(**kwargs)
+
     def get_chrome(self):
         options = uc.ChromeOptions()
         binary = self._chrome_binary()
@@ -486,7 +511,8 @@ class Browser:
         if binary:
             kwargs["browser_executable_path"] = binary
 
-        driver = uc.Chrome(**kwargs)
+        # driver = uc.Chrome(**kwargs)
+        driver = self._start_uc(kwargs)
         self._inject_cdp(driver)
         self._finalize(driver)
         return driver
@@ -510,7 +536,7 @@ class Browser:
         if version:
             kwargs["version_main"] = version
 
-        driver = uc.Chrome(**kwargs)
+        driver = self._start_uc(kwargs)
         self._inject_cdp(driver)
         self._finalize(driver)
         return driver

@@ -364,7 +364,7 @@ class G2Page:
             
             result_link = self.scroll_until_result_is_found(self.target_text)
             if result_link is None:
-                breakpoint()
+                
                 raise RuntimeError(
                     f"Could not find the exact Google result: {self.target_text}"
                 )
