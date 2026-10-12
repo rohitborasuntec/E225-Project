@@ -5,7 +5,7 @@ import sys
 import argparse
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import NoSuchWindowException, TimeoutException
@@ -126,17 +126,15 @@ class TestMuAutomation:
             if self.LOCAL_DIRECT_SEARCH:
                 self.google_search.last_query = "browserstack"
                 self.google_search.get_google(query="browserstack")
-                self._step(
-                    "google_direct_search",
-                    details="browserstack (local mode)",
-                )
+                self._step("google_direct_search", details="browserstack (local mode)")
                 WebDriverWait(self.driver, 15, poll_frequency=0.25).until(
                     lambda driver: "/search" in driver.current_url
                 )
                 save_html(self.driver.page_source, "MU_browserstack")
                 self._step("google_html_saved", details="MU_browserstack")
             else:
-                self._step("google_search_work_started")
+                # Preserve the same randomized Google search behavior as G2.
+                self._step("google_search_work_started", details="G2-style randomized search")
                 self.google_search.search_work(
                     self._g2_search_combinations(),
                     step_callback=lambda step, details: self._step(
@@ -203,7 +201,9 @@ class TestMuAutomation:
 
         results = {}
         deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
+        # Leave a small safety buffer so a final hover/selection action cannot
+        # push the real visit beyond the selected 20–32 second window.
+        while time.monotonic() + 4 < deadline:
             for link in self.driver.find_elements(By.XPATH, self.SPONSORED_LINK_XPATH):
                 try:
                     if not link.is_displayed():
@@ -265,57 +265,71 @@ class TestMuAutomation:
         self._step("sponsored_scan_completed", details=f"count={len(results)}")
         return list(results.values())
 
-    def _browse_sponsored_website(self, website, max_seconds=30):
-        """Perform a short, bounded HumanSimulator interaction on one ad site."""
+    def _browse_sponsored_website(self, website, duration_seconds):
+        """Browse one ad site in small HumanSimulator actions for a bounded time."""
         started = time.monotonic()
-        deadline = started + max_seconds
+        deadline = started + duration_seconds
         self._step(
             "sponsored_site_browse_started",
-            details=f"website={website} max_seconds={max_seconds}",
+            details=f"website={website} duration_seconds={duration_seconds:.2f}",
         )
 
-        # Keep this deliberately small: one selection, one short scroll, and
-        # one hover are enough to create a human-like visit without repeatedly
-        # walking the whole page.
-        try:
-            if time.monotonic() < deadline:
-                selected = self.human_simulator.select_text_once()
-                logger.info(f"HumanSimulator text selection on {website}: {bool(selected)}")
-                self._step("sponsored_site_text_select", details=f"website={website}")
-        except Exception as error:
-            logger.warning(f"Text selection skipped on {website}: {error}")
-
-        try:
-            if time.monotonic() < deadline:
-                self.human_simulator.scroll_page(
-                    total_scroll=random.randint(1, 2),
-                    step_delay=random.uniform(0.12, 0.25),
-                    direction="down",
+        action_number = 0
+        while time.monotonic() < deadline:
+            action_number += 1
+            action = random.choice(("select", "scroll", "hover"))
+            try:
+                if action == "select":
+                    selected = self.human_simulator.select_text_once()
+                    self._step(
+                        "sponsored_site_action",
+                        details=(
+                            f"website={website} action={action_number} "
+                            f"type=text_select result={bool(selected)}"
+                        ),
+                    )
+                elif action == "scroll":
+                    self.human_simulator.scroll_page(
+                        total_scroll=random.randint(1, 2),
+                        step_delay=random.uniform(0.12, 0.25),
+                        direction=random.choice(("down", "up")),
+                    )
+                    self._step(
+                        "sponsored_site_action",
+                        details=f"website={website} action={action_number} type=short_scroll",
+                    )
+                else:
+                    elements = self.driver.find_elements(
+                        By.CSS_SELECTOR,
+                        "main h1, main h2, main h3, main p, main img, "
+                        "article h2, article h3, section h2, section h3",
+                    )
+                    visible = [element for element in elements if element.is_displayed()]
+                    if visible:
+                        self.human_simulator.mouse_hover(
+                            random.choice(visible), hover_time=random.uniform(0.6, 1.2)
+                        )
+                    self._step(
+                        "sponsored_site_action",
+                        details=f"website={website} action={action_number} type=hover",
+                    )
+            except Exception as error:
+                logger.warning(f"Website action failed on {website}: {error}")
+                self._step(
+                    "sponsored_site_action",
+                    "failed",
+                    f"website={website} action={action_number} type={action} error={error}",
                 )
-                logger.info(f"HumanSimulator short scroll on {website}")
-                self._step("sponsored_site_scroll", details=f"website={website}")
-        except Exception as error:
-            logger.warning(f"Short scroll skipped on {website}: {error}")
-
-        try:
-            if time.monotonic() < deadline:
-                elements = self.driver.find_elements(
-                    By.CSS_SELECTOR,
-                    "main h1, main h2, main h3, main p, main img, "
-                    "article h2, article h3, section h2, section h3",
-                )
-                visible = [element for element in elements if element.is_displayed()]
-                if visible:
-                    element = random.choice(visible)
-                    self.human_simulator.mouse_hover(element, hover_time=0.8)
-                    logger.info(f"HumanSimulator hover on {website}")
-                    self._step("sponsored_site_hover", details=f"website={website}")
-        except Exception as error:
-            logger.warning(f"Hover skipped on {website}: {error}")
+            remaining = max(0, deadline - time.monotonic())
+            if remaining:
+                time.sleep(min(random.uniform(0.7, 1.6), remaining))
 
         elapsed = round(time.monotonic() - started, 2)
         logger.info(f"Sponsored website visit completed: {website}; elapsed={elapsed}s")
-        self._step("sponsored_site_browse_completed", details=f"website={website} elapsed={elapsed}s")
+        self._step(
+            "sponsored_site_browse_completed",
+            details=f"website={website} elapsed={elapsed}s actions={action_number}",
+        )
 
     def _visit_all_sponsored_websites(self, results):
         """Open every sponsored result entry and return to Google each time."""
@@ -323,7 +337,6 @@ class TestMuAutomation:
             self._step("sponsored_site_visits", "empty")
             return False
 
-        google_handle = self.driver.current_window_handle
         google_url = self.driver.current_url
         total_results = len(results)
         self._step(
@@ -350,7 +363,8 @@ class TestMuAutomation:
                         if candidate.is_displayed()
                         and (
                             candidate.get_attribute("href") == result["href"]
-                            or website_key in (candidate.get_attribute("href") or "").casefold()
+                            or self._advertiser_website(candidate.get_attribute("href") or "")
+                            == website.casefold()
                         )
                     ),
                     None,
@@ -366,34 +380,29 @@ class TestMuAutomation:
                     continue
 
                 old_url = self.driver.current_url
-                old_handles = set(self.driver.window_handles)
                 self._step(
                     "sponsored_site_click_started",
                     details=f"entry={result_number}/{total_results} website={website}",
                 )
+                self.driver.execute_script(
+                    "arguments[0].setAttribute('target', '_self');", link
+                )
                 self.human_simulator.mouse_hover(link, hover_time=0.5)
                 self.human_simulator.mouse_click_after_hover(link)
 
-                def destination_opened(_):
-                    new_handles = set(self.driver.window_handles) - old_handles
-                    if new_handles:
-                        self.driver.switch_to.window(next(iter(new_handles)))
-                        return self.driver.current_url != "about:blank"
-                    return self.driver.current_url != old_url
-
                 try:
-                    WebDriverWait(self.driver, 10, poll_frequency=0.25).until(destination_opened)
+                    WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
+                        lambda driver: driver.current_url != old_url
+                    )
                 except TimeoutException:
                     logger.warning(f"Sponsored click did not navigate on first attempt: {website}")
                     try:
                         link.click()
                     except Exception:
                         self.driver.execute_script("arguments[0].click();", link)
-                    WebDriverWait(self.driver, 10, poll_frequency=0.25).until(destination_opened)
-
-                new_handles = set(self.driver.window_handles) - old_handles
-                if new_handles:
-                    self.driver.switch_to.window(next(iter(new_handles)))
+                    WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
+                        lambda driver: driver.current_url != old_url
+                    )
                 WebDriverWait(self.driver, 10, poll_frequency=0.25).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
@@ -405,7 +414,15 @@ class TestMuAutomation:
                         f"url={self.driver.current_url}"
                     ),
                 )
-                self._browse_sponsored_website(website, max_seconds=30)
+                visit_seconds = random.uniform(20, 32)
+                self._step(
+                    "sponsored_site_duration_selected",
+                    details=(
+                        f"entry={result_number}/{total_results} website={website} "
+                        f"duration_seconds={visit_seconds:.2f}"
+                    ),
+                )
+                self._browse_sponsored_website(website, duration_seconds=visit_seconds)
             except Exception as error:
                 logger.warning(f"Sponsored website visit failed for {website}: {error}")
                 self._step(
@@ -417,10 +434,7 @@ class TestMuAutomation:
                 )
             finally:
                 try:
-                    if self.driver.current_window_handle != google_handle:
-                        self.driver.close()
-                        self.driver.switch_to.window(google_handle)
-                    elif self.driver.current_url != google_url:
+                    if self.driver.current_url != google_url:
                         self.driver.back()
                     WebDriverWait(self.driver, 8, poll_frequency=0.25).until(
                         lambda driver: "/search" in driver.current_url or bool(driver.find_elements(By.ID, "search"))
@@ -472,20 +486,64 @@ class TestMuAutomation:
             return []
 
         old_url = self.driver.current_url
+        try:
+            page_two_href = page_two_link.get_attribute("href") or ""
+        except Exception:
+            page_two_href = ""
+        if not page_two_href:
+            parsed_url = urlparse(old_url)
+            query = parse_qs(parsed_url.query)
+            query["start"] = ["10"]
+            page_two_href = urlunparse(
+                parsed_url._replace(query=urlencode(query, doseq=True))
+            )
+            self._step(
+                "google_page_two_href_built",
+                details=f"url={page_two_href}",
+            )
         self._step(
             "google_page_two_click_started",
-            details=selected_page_two_xpath or "unknown_xpath",
+            details=(
+                f"xpath={selected_page_two_xpath or 'unknown_xpath'} "
+                f"href={page_two_href}"
+            ),
         )
         try:
+            self.driver.execute_script(
+                "arguments[0].setAttribute('target', '_self');", page_two_link
+            )
             self.human_simulator.mouse_hover(page_two_link, hover_time=0.4)
             self.human_simulator.mouse_click_after_hover(page_two_link)
+            try:
+                WebDriverWait(self.driver, 8, poll_frequency=0.25).until(
+                    lambda driver: (
+                        "start=10" in driver.current_url
+                        or "page=2" in driver.current_url
+                    )
+                )
+            except TimeoutException:
+                self._step(
+                    "google_page_two_click_fallback",
+                    details="click did not reach page 2; opening verified page-2 href in same tab",
+                )
+                self.driver.get(page_two_href)
+                WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
+                    lambda driver: (
+                        "start=10" in driver.current_url
+                        or "page=2" in driver.current_url
+                    )
+                )
             WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
-                lambda driver: driver.current_url != old_url
+                lambda driver: (
+                    ("start=10" in driver.current_url or "page=2" in driver.current_url)
+                    and "/search" in driver.current_url
+                    or bool(driver.find_elements(By.ID, "search"))
+                )
             )
-            WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
-                EC.presence_of_element_located((By.ID, "search"))
+            self._step(
+                "google_page_two_opened",
+                details=f"url={self.driver.current_url} same_tab=True",
             )
-            self._step("google_page_two_opened", details=self.driver.current_url)
         except Exception as error:
             logger.warning(f"Google page 2 could not be opened: {error}")
             self._step("google_page_two", "failed", details=str(error))
@@ -560,28 +618,40 @@ class TestMuAutomation:
         if not testmu_results:
             self._step("testmu_target", "not_found")
             logger.info(
-                "TestMu was not found; sponsored websites were saved but not opened"
+                "TestMu was not found on Google page 1; moving to Google page 2"
             )
-            return False
+            page_two_results = self._click_google_page_two_and_scan()
+            if not page_two_results:
+                self._step("sponsored_site_visits", "empty", "no page-2 sponsored websites")
+                return False
+            self._step(
+                "google_page_two_visit_condition",
+                details="TestMu absent on page 1; processing page-2 sponsored list",
+            )
+            completed = self._visit_all_sponsored_websites(page_two_results)
+            self._step(
+                "mu_flow_completed",
+                "ok" if completed else "failed",
+                "page-2 sponsored flow finished",
+            )
+            return completed
 
         self._step(
             "testmu_target",
             "found",
             details=f"website={testmu_results[0]['website']}; opening all sponsored websites",
         )
-        # Visit every sponsored result on page 1 first. A failed site is
-        # isolated inside _visit_all_sponsored_websites and cannot stop the loop.
-        page_one_completed = self._visit_all_sponsored_websites(results)
-        self._step("google_page_one_completed", details=f"completed={page_one_completed}")
-
-        # Page 2 is only opened after TestMu was confirmed on page 1.
-        page_two_results = self._click_google_page_two_and_scan()
-        if page_two_results:
-            page_two_completed = self._visit_all_sponsored_websites(page_two_results)
-            self._step("google_page_two_site_visits_completed", details=f"completed={page_two_completed}")
-        else:
-            self._step("google_page_two_site_visits", "empty", "no page-2 sponsored sites")
-        return True
+        self._step(
+            "google_page_one_visit_condition",
+            details="TestMu found on page 1; processing every page-1 sponsored entry",
+        )
+        completed = self._visit_all_sponsored_websites(results)
+        self._step(
+            "mu_flow_completed",
+            "ok" if completed else "failed",
+            "page-1 sponsored flow finished",
+        )
+        return completed
 
         # Legacy single-TestMu interaction flow retained below for reference.
         target = None
