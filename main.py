@@ -233,6 +233,18 @@ class TestMuAutomation:
             return False
 
         self._step("sponsored_candidates_collected", details=f"count={len(results)}")
+        self._step(
+            "sponsored_link_array_created",
+            details=f"count={len(results)}; links_collected_before_opening=True",
+        )
+        for link_number, result in enumerate(results.values(), start=1):
+            self._step(
+                "sponsored_link_array_item",
+                details=(
+                    f"item={link_number}/{len(results)} "
+                    f"website={result['website']} href={result['href']}"
+                ),
+            )
 
         search_query = (
             getattr(self.google_search, "last_query", None)
@@ -332,16 +344,17 @@ class TestMuAutomation:
         )
 
     def _visit_all_sponsored_websites(self, results):
-        """Open every sponsored result entry and return to Google each time."""
+        """Open every stored sponsored result in a temporary tab, one by one."""
         if not results:
             self._step("sponsored_site_visits", "empty")
             return False
 
+        google_handle = self.driver.current_window_handle
         google_url = self.driver.current_url
         total_results = len(results)
         self._step(
             "sponsored_site_visit_queue",
-            details=f"total_entries={total_results}",
+            details=f"total_entries={total_results}; mode=new_tab_per_entry",
         )
 
         for result_number, result in enumerate(results, start=1):
@@ -379,42 +392,41 @@ class TestMuAutomation:
                     )
                     continue
 
-                old_url = self.driver.current_url
                 self._step(
-                    "sponsored_site_click_started",
+                    "sponsored_site_new_tab_open_started",
                     details=f"entry={result_number}/{total_results} website={website}",
                 )
-                self.driver.execute_script(
-                    "arguments[0].setAttribute('target', '_self');", link
-                )
                 self.human_simulator.mouse_hover(link, hover_time=0.5)
-                self.human_simulator.mouse_click_after_hover(link)
-
-                try:
-                    WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
-                        lambda driver: driver.current_url != old_url
-                    )
-                except TimeoutException:
-                    logger.warning(f"Sponsored click did not navigate on first attempt: {website}")
-                    try:
-                        link.click()
-                    except Exception:
-                        self.driver.execute_script("arguments[0].click();", link)
-                    WebDriverWait(self.driver, 12, poll_frequency=0.25).until(
-                        lambda driver: driver.current_url != old_url
-                    )
+                # Keep Google untouched. The hover preserves the mouse-like
+                # interaction, then window.open creates only this entry's tab.
+                self.driver.execute_script(
+                    "window.open(arguments[0], '_blank');", result["href"]
+                )
+                WebDriverWait(self.driver, 10, poll_frequency=0.25).until(
+                    lambda driver: len(driver.window_handles) > 1
+                )
+                new_handles = [
+                    handle for handle in self.driver.window_handles
+                    if handle != google_handle
+                ]
+                if not new_handles:
+                    raise RuntimeError("Sponsored new tab was not created")
+                self.driver.switch_to.window(new_handles[-1])
                 WebDriverWait(self.driver, 10, poll_frequency=0.25).until(
                     EC.presence_of_element_located((By.TAG_NAME, "body"))
                 )
-                logger.info(f"Sponsored website opened: {website}; url={self.driver.current_url}")
+                logger.info(
+                    f"Sponsored website opened in new tab: {website}; "
+                    f"url={self.driver.current_url}"
+                )
                 self._step(
-                    "sponsored_site_opened",
+                    "sponsored_site_new_tab_opened",
                     details=(
                         f"entry={result_number}/{total_results} website={website} "
-                        f"url={self.driver.current_url}"
+                        f"url={self.driver.current_url} tab_count={len(self.driver.window_handles)}"
                     ),
                 )
-                visit_seconds = random.uniform(20, 32)
+                visit_seconds = random.uniform(22, 25)
                 self._step(
                     "sponsored_site_duration_selected",
                     details=(
@@ -434,19 +446,32 @@ class TestMuAutomation:
                 )
             finally:
                 try:
-                    if self.driver.current_url != google_url:
-                        self.driver.back()
+                    if self.driver.current_window_handle != google_handle:
+                        self._step(
+                            "sponsored_site_tab_close_started",
+                            details=f"entry={result_number}/{total_results} website={website}",
+                        )
+                        self.driver.close()
+                        self.driver.switch_to.window(google_handle)
+                        self._step(
+                            "sponsored_site_tab_closed",
+                            details=f"entry={result_number}/{total_results} website={website}",
+                        )
+                    elif self.driver.current_url != google_url:
+                        self.driver.get(google_url)
                     WebDriverWait(self.driver, 8, poll_frequency=0.25).until(
-                        lambda driver: "/search" in driver.current_url or bool(driver.find_elements(By.ID, "search"))
+                        lambda driver: "/search" in driver.current_url
+                        or bool(driver.find_elements(By.ID, "search"))
                     )
                 except Exception as error:
-                    logger.warning(f"Could not restore Google results after {website}: {error}")
+                    logger.warning(f"Could not restore Google tab after {website}: {error}")
                     try:
+                        self.driver.switch_to.window(google_handle)
                         self.driver.get(google_url)
                     except Exception:
                         pass
                 self._step(
-                    "sponsored_site_returned_to_google",
+                    "sponsored_site_returned_to_google_tab",
                     details=f"entry={result_number}/{total_results} website={website}",
                 )
 
