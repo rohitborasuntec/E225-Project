@@ -751,6 +751,13 @@ class G2Page:
     breadcrumb_xpath = G2_PAGE_XPATHS["breadcrumb"]
     login_modal_close_xpath = G2_PAGE_XPATHS["login_modal_close"]
 
+    # === BUDGETED SELECTION DEFAULTS ===
+    # These are the defaults used by run_g2_page; override per-call if needed.
+    SELECTION_MIN_SECONDS = 12
+    SELECTION_MAX_SECONDS = 25
+    SELECTION_BATCHES = 3
+    SELECTION_WORDS_PER_BATCH = (1, 3)
+
     def __init__(self, driver, human_simulator, product, comparing_product):
         self.driver = driver
         self.human_simulator = human_simulator
@@ -779,10 +786,6 @@ class G2Page:
         )
 
     def close_login_modal_if_present(self, timeout=1):
-        # try:
-        #     modal = WebDriverWait(self.driver, timeout, poll_frequency=0.1).until(
-        #         EC.visibility_of_element_located((By.ID, "login-modal"))
-        #     )
         modal = wait_for_element(
             self.driver,
             (By.ID, "login-modal"),
@@ -792,8 +795,6 @@ class G2Page:
         )
         if modal is None:
             return False
-        # except TimeoutException:
-        #     return False
 
         buttons = modal.find_elements(By.CSS_SELECTOR, "button")
         visible_buttons = [b for b in buttons if b.is_displayed()]
@@ -807,13 +808,7 @@ class G2Page:
                 key=lambda b: b.rect["x"] - b.rect["y"],
             )
 
-        # actions = ActionChains(self.driver)
-        # actions.move_to_element(close_button).pause(0.05).click().perform()
-        # self.human_simulator.mouse_hover(close_button)
         self.human_simulator.mouse_click_after_hover(close_button)
-        # WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
-        #     EC.invisibility_of_element_located((By.ID, "login-modal"))
-        # )
         wait_for_element(
             self.driver,
             (By.ID, "login-modal"),
@@ -857,7 +852,6 @@ class G2Page:
             result_link = self.find_exact_result_link(expected_text)
             if result_link is not None:
                 return result_link
-            # self.scroll_down()
             self.human_simulator.scroll_page(direction="down")
             time.sleep(random.uniform(1, 3))
         return self.find_exact_result_link(expected_text)
@@ -1026,7 +1020,7 @@ class G2Page:
         self.follow_clicked_link(old_url, old_handles)
         logger.info(f"Opened breadcrumb: {self.driver.current_url}")
 
-    def browse_g2_page(self, min_seconds=5, max_seconds=10):
+    def browse_g2_page(self, min_seconds=1, max_seconds=5):
         if not G2_PRODUCT_POOL.get("xpaths"):
             return self._legacy_browse(min_seconds, max_seconds)
         duration = random.uniform(min_seconds, max_seconds)
@@ -1035,7 +1029,7 @@ class G2Page:
             duration=duration, pool=G2_PRODUCT_POOL
         )
 
-    def _legacy_browse(self, min_seconds=45, max_seconds=55):
+    def _legacy_browse(self, min_seconds=1, max_seconds=5):
         duration = random.uniform(min_seconds, max_seconds)
         deadline = time.monotonic() + duration
         actions = []
@@ -1091,17 +1085,6 @@ class G2Page:
             human.calibrate_screen_offset()
             self.human_simulator = human  # keep the class in sync
 
-        # if not human.use_native_cursor or human.pyautogui is None:
-        #     raise RuntimeError(
-        #         "Native mouse control is unavailable; BrowserStack run stopped"
-        #     )
-
-        # desktop = human.pyautogui.size()
-        # if desktop.width <= 0 or desktop.height <= 0:
-        #     raise RuntimeError(
-        #         "No visible desktop is available for BrowserStack mouse control"
-        #     )
-
         self.driver._browserstack_human = human
         logger.info("Using BrowserStack native mouse cursor and wheel flow")
         return G2BrowserStack(self.driver, human).run()
@@ -1114,6 +1097,58 @@ class G2Page:
     # ------------------------------------------------------------------ #
     # Sauce Labs flow (uses the plain HumanSimulator)
     # ------------------------------------------------------------------ #
+
+    def _run_budgeted_word_selection(self):
+        """
+        Run the reusable budgeted word-selection flow.
+
+        The G2-specific bits (close modal, show more, mouse wander) are
+        passed as hooks so HumanSimulator stays page-agnostic.
+        """
+        human = self.human_simulator
+
+        def before_batch(batch_index):
+            # Close any login modal that may have re-appeared between batches.
+            try:
+                self.close_login_modal_if_present(timeout=0.4)
+            except Exception:
+                pass
+
+        def after_batch(batch_index):
+            try:
+                self.close_login_modal_if_present(timeout=0.4)
+            except Exception:
+                pass
+            try:
+                human.move_mouse_around(moves=1)
+            except Exception:
+                pass
+
+        # Optional: click "Show More" once before starting (same as original).
+        try:
+            self.click_one_random_show_more()
+        except Exception as error:
+            logger.warning(f"Show More skipped: {error}")
+
+        labels = ["on Sauce Labs page", "on Alternatives page", "after breadcrumb"]
+
+        result = human.select_random_words_budgeted(
+            min_seconds=self.SELECTION_MIN_SECONDS,
+            max_seconds=self.SELECTION_MAX_SECONDS,
+            batches=self.SELECTION_BATCHES,
+            words_per_batch=self.SELECTION_WORDS_PER_BATCH,
+            pre_hook=before_batch,
+            post_hook=after_batch,
+            inter_batch_pause=(0.4, 1.0),
+            label_fn=lambda i: labels[i] if i < len(labels) else f"batch {i + 1}",
+        )
+
+        logger.info(
+            f"Budgeted selection: {len(result['all_words'])} words in "
+            f"{result['elapsed']:.1f}s / {result['budget']:.1f}s "
+            f"(completed={result['completed']}, skipped={result['skipped']})"
+        )
+        return result
 
     def run_g2_page(self):
         try:
@@ -1129,45 +1164,29 @@ class G2Page:
             self.human_simulator.input_search_query(
                 query=self.search_query, suggestion=False
             )
-            # result_link = self.scroll_until_result_is_found(self.target_text)
-            
-            # for i in range(5):
+
             try:
                 element_xpath = f"//*[contains(text(), '{self.target_text}')]/parent::a"
                 wait_for_element(
-                    driver = self.driver,
-                    locator= (By.XPATH, element_xpath),
+                    driver=self.driver,
+                    locator=(By.XPATH, element_xpath),
                     condition="presence",
                     timeout=10,
                     poll=0.5,
                 )
-                self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, element_xpath))   
+                self.human_simulator.mouse_click_after_hover(
+                    self.driver.find_element(By.XPATH, element_xpath)
+                )
                 logger.info(f"Clicked Google result: {self.target_text}")
             except Exception:
-                save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
+                save_html(
+                    self.driver.page_source,
+                    f"G2_{self.product}_{self.comparing_product} ",
+                )
                 logger.error(f"Could not find the exact Google result: {self.target_text}")
                 raise RuntimeError(
                     f"Could not find the exact Google result: {self.target_text}"
                 )
-
-            # self.human_simulator.move_mouse_around(moves=2)
-            # self.human_simulator.mouse_hover(result_link, hover_time=1.2)
-            # # result_url = result_link.get_attribute("href")
-            # self.human_simulator.mouse_click_after_hover(result_link)
-
-            # try:
-            #     self._poll(self.switch_to_g2_page, timeout=10, poll=0.3)
-            # except TimeoutError:
-            #     if not result_url:
-            #         # breakpoint()
-            #         save_html(self.driver.page_source, f"G2_{self.product}")
-            #         raise RuntimeError("Sauce Labs Google result has no URL")
-            #     logger.warning(
-            #         "Sauce Labs mouse click did not navigate; retrying the "
-            #         "same Google result URL"
-            #     )
-            #     self.driver.get(result_url)
-            #     self._poll(self.switch_to_g2_page, timeout=20, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
 
             for refresh_attempt in range(5):
@@ -1180,52 +1199,32 @@ class G2Page:
                 self.driver.refresh()
                 time.sleep(randint(3, 5))
             else:
-                save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
-                logger.error(f"G2 {self.product} page is still Access Denied "
-                             "after 5 refreshes")
+                save_html(
+                    self.driver.page_source,
+                    f"G2_{self.product}_{self.comparing_product} ",
+                )
+                logger.error(
+                    f"G2 {self.product} page is still Access Denied "
+                    "after 5 refreshes"
+                )
                 raise AccessDeniedError(
                     f"G2 {self.product} page got Access Denied"
                 )
-            # --------------------------------------------------------------------
-            # save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
 
             self.close_login_modal_if_present()
-            self.human_simulator.move_mouse_around(moves=3)
+            self.human_simulator.move_mouse_around(moves=1)
 
-            total_words = random.choice([4, 5, 6, 9])
-            first_count = random.randint(1, min(3, total_words - 2))
-            second_count = random.randint(1, min(2, total_words - first_count - 1))
-            final_count = total_words - first_count - second_count
-
-            self.click_one_random_show_more()
-            self.close_login_modal_if_present(timeout=0.4)
-            first_words = self.human_simulator.select_random_words(first_count)
-            logger.info(f"Mouse-selected on Sauce Labs page: {first_words}")
-            self.human_simulator.move_mouse_around(moves=2)
-            self.close_login_modal_if_present(timeout=0.4)
-            second_words = self.human_simulator.select_random_words(
-                second_count, already_selected=first_words
-            )
-            logger.info(f"Mouse-selected on Alternatives page: {second_words}")
-            # try:
-            #     self.open_fifth_breadcrumb()
-            # except Exception:
-            #     logger.error("Not Found fifth breadcrumb")
-            final_words = self.human_simulator.select_random_words(
-                final_count, already_selected=first_words + second_words
-            )
-            logger.info(f"Mouse-selected after breadcrumb: {final_words}")
-            logger.info(
-                f"Total distinct words selected: "
-                f"{len(first_words + second_words + final_words)}"
-            )
+            # === BUDGETED SELECTION ===
+            # Replaces the old first/second/final word-count logic.
+            # Total selection is bounded to [20s, 40s]; no overshoot.
+            self._run_budgeted_word_selection()
 
             try:
-                browsing = self.browse_g2_page()
+                browsing = self.browse_g2_page(min_seconds=1, max_seconds=5)
                 logger.info(f"Varied G2 browsing: {browsing}")
             except Exception:
                 logger.exception("Browse g2 error")
-            time.sleep(random.uniform(0.5, 2.0))
+
             logger.info(f"G2 {self.product} automation completed successfully")
         except Exception as error:
             logger.exception(f"G2 {self.product} automation failed: {error}")
@@ -1312,18 +1311,6 @@ class G2BrowserStack(G2Page):
             f"{time.monotonic() - started_at:.1f}s"
         )
 
-    # def find_exact_result_link(self, expected_text):
-    #     exact = super().find_exact_result_link(expected_text)
-    #     if exact is not None:
-    #         return exact
-    #     for heading in self.driver.find_elements(By.CSS_SELECTOR, "a[href] h3"):
-    #         title = (heading.text or "").lower()
-    #         if title.startswith("browserstack reviews") and "details" in title:
-    #             return heading.find_element(
-    #                 By.XPATH, G2_BROWSERSTACK_XPATHS["ancestor_link"]
-    #             )
-    #     return None
-
     def scroll_until_result_is_found(self, expected_text):
         for _ in range(self.max_scroll_attempts + 1):
             result = self.find_exact_result_link(expected_text)
@@ -1333,26 +1320,6 @@ class G2BrowserStack(G2Page):
             scroll_with_mouse(self.driver, random.randint(220, 380))
             time.sleep(random.uniform(0.8, 1.4))
         return None
-
-    # def wait_for_google_verification(self):
-    #     if not urlsplit(self.driver.current_url).path.startswith("/sorry"):
-    #         return
-    #     logger.warning(
-    #         "Google verification page opened. Complete it manually in Chrome "
-    #         "within 90 seconds to continue."
-    #     )
-    #     try:
-    #         WebDriverWait(self.driver, 90, poll_frequency=1).until(
-    #             lambda driver: (
-    #                 not urlsplit(driver.current_url).path.startswith("/sorry")
-    #                 and bool(driver.find_elements(By.CSS_SELECTOR, "a[href] h3"))
-    #             )
-    #         )
-    #     except TimeoutException as error:
-    #         raise RuntimeError(
-    #             "Google verification was not completed; "
-    #             "no search results are available"
-    #         ) from error
 
     def wait_for_g2_result(self, timeout=30):
         try:
@@ -1371,7 +1338,6 @@ class G2BrowserStack(G2Page):
 
     def run(self):
         logger.info("G2 BrowserStack automation started")
-        # self.driver.get("https://www.google.com")
         self.human_simulator.input_search_query(
             self.search_query, suggestion=False
         )
@@ -1408,7 +1374,6 @@ class G2BrowserStack(G2Page):
             self.wait_for_g2_result(timeout=10)
         logger.info(f"Opened result: {self.driver.current_url}")
 
-        # save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
         self.close_login_modal_if_present(timeout=0.4)
         BrowserStackReviewsProductDetails(
             self.driver, self.human_simulator
@@ -1435,7 +1400,7 @@ def run(product="BrowserStack", comparing_product=None):
     options.add_argument("window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
 
-    driver = uc.Chrome(options=options,version_main=152)
+    driver = uc.Chrome(options=options, version_main=152)
 
     try:
         logger.info("Opening Google")

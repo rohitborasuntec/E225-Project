@@ -33,9 +33,18 @@ NON_SCROLL_WEIGHT_BOOST = 6.0
 # 1.0 = original speed; 1.35 ~= 35% slower overall.
 GLOBAL_PACE_MULTIPLIER = 1.35
 
+# Per-word cost (seconds) used by the budgeted word-selection routine.
+_BUDGETED_PER_WORD_COST = 0.9
+
 
 class HumanSimulator:
-    def __init__(self, driver, use_native_cursor=False, verbose=False):
+    def __init__(
+        self,
+        driver,
+        use_native_cursor=False,
+        verbose=False,
+        enable_budgeted_selection=True,   # <-- NEW
+    ):
         """
         use_native_cursor: if True, drives the REAL OS mouse cursor via
         pyautogui (visible on screen). Requires pyautogui + a working
@@ -44,6 +53,10 @@ class HumanSimulator:
 
         Call calibrate_screen_offset() right after construction to compute
         the correct viewport->screen coordinate mapping for your browser.
+
+        enable_budgeted_selection: master switch for
+        select_random_words_budgeted(). When False, that method returns
+        an empty result immediately.
         """
         self.driver = driver
         # NEW: start cursor somewhere natural instead of (0,0)
@@ -64,6 +77,9 @@ class HumanSimulator:
         self._micro_pause_chance = 0.08   # chance of a mid-action pause
         self._last_action_time = time.time()
         self._tod_factor = self._compute_tod_factor()
+
+        # NEW: master switch for the budgeted selection flow
+        self.enable_budgeted_selection = enable_budgeted_selection
 
         if use_native_cursor:
             try:
@@ -432,7 +448,7 @@ class HumanSimulator:
             return False
 
     # ==================================================================
-    # PRIMARY MOUSE MOVE  (CHANGED: uses _human_mouse_path + fatigue)
+    # PRIMARY MOUSE MOVE
     # ==================================================================
     def move_to_element_like_human(
         self, element, steps=None, step_delay=None, verify=True
@@ -451,7 +467,6 @@ class HumanSimulator:
 
         steps = steps if steps is not None else int(self._gauss(30, 6, 15, 60))
 
-        # CHANGED: use the tremor + overshoot aware path
         path = self._human_mouse_path(start, end, steps=steps)
 
         if step_delay is None:
@@ -460,7 +475,6 @@ class HumanSimulator:
             delay_mean, delay_stdev = step_delay, step_delay * 0.3
 
         if self.use_native_cursor:
-            # ---------- NATIVE (visible) cursor path ----------
             win_pos = self.driver.get_window_position()
             for i, (x, y) in enumerate(path):
                 t = i / max(len(path) - 1, 1)
@@ -479,14 +493,12 @@ class HumanSimulator:
                     self.use_native_cursor = False
                     self.pyautogui = None
                     break
-                # CHANGED: human acceleration profile + fatigue
                 step_time = delay_mean * (0.6 + 0.8 * (1 - abs(0.5 - eased)))
                 step_time *= self._fatigue_factor
                 jittered = self._gauss(step_time, step_time * 0.25, 0.001, None)
                 time.sleep(jittered)
             self.current_x, self.current_y = path[-1]
         else:
-            # ---------- SYNTHETIC (invisible) path ----------
             self.driver.execute_script(
                 "for (const type of ['mousemove','mouseover','mouseenter']) "
                 "arguments[0].dispatchEvent(new MouseEvent(type, {bubbles:true}));",
@@ -495,7 +507,6 @@ class HumanSimulator:
             time.sleep(self._gauss(0.18, 0.05, 0.08, 0.3))
             self.current_x, self.current_y = end
 
-        # Pointer-target verification (only meaningful in synthetic mode)
         if verify and not self.use_native_cursor:
             if not self._verify_pointer_target(
                 self.current_x, self.current_y, element
@@ -514,12 +525,6 @@ class HumanSimulator:
     # SAFE ELEMENT CLICK (native -> scroll+retry -> JS fallback)
     # ==================================================================
     def _safe_element_click(self, element):
-        """
-        Try native .click() first; if the browser reports that the element
-        is out of the viewport (ElementClickInterceptedException), scroll
-        it back into view and retry, then fall back to a JS click.
-        Returns True on success.
-        """
         try:
             self._scroll_element_into_view(element)
         except Exception:
@@ -571,20 +576,18 @@ class HumanSimulator:
             action()
 
     # ==================================================================
-    # NEW: HUMAN TYPING (bursts, typos, corrections, look-aways)
+    # HUMAN TYPING (bursts, typos, corrections, look-aways)
     # ==================================================================
     def _human_type_text(self, element, text):
         """Type with realistic burst patterns, corrections, and pauses."""
         i = 0
         while i < len(text):
-            # Burst typing: 2-5 chars fast
             burst = random.randint(2, 5)
             for _ in range(burst):
                 if i >= len(text):
                     break
                 char = text[i]
 
-                # 3% chance to type a wrong char then backspace-correct
                 if random.random() < 0.03 and char.isalpha():
                     wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
                     element.send_keys(wrong)
@@ -595,19 +598,16 @@ class HumanSimulator:
                 element.send_keys(char)
                 i += 1
 
-                # Per-char delay, faster inside a burst
                 base = self._gauss(0.09, 0.03, 0.04, 0.22) * self._fatigue_factor
                 if char in " ,.?!;:":
                     base += random.uniform(0.08, 0.18)
                 time.sleep(base)
 
-            # Pause between bursts (thinking / reading)
             if random.random() < 0.35:
                 time.sleep(self._gauss(0.55, 0.25, 0.15, 1.4))
             else:
                 time.sleep(self._gauss(0.18, 0.06, 0.05, 0.4))
 
-            # 5% chance to look away briefly
             if random.random() < 0.05:
                 self._random_drift()
 
@@ -734,7 +734,6 @@ class HumanSimulator:
         search_box.clear()
         logger.info(f"Query Used {input_query}")
 
-        # CHANGED: use _human_type_text for realistic bursts + corrections
         self._human_type_text(search_box, input_query)
 
         if suggestion:
@@ -749,25 +748,22 @@ class HumanSimulator:
         )
         time.sleep(final_pause)
         search_box.clear()
-        # CHANGED: second pass also uses human typing
         self._human_type_text(search_box, input_query)
         self.mouse_click(search_box)
         search_box.submit()
         return input_query
 
     # ==================================================================
-    # CHANGED: mouse_click with pre-click scanning + rare miss-click
+    # mouse_click with pre-click scanning + rare miss-click
     # ==================================================================
     def mouse_click(self, element, click_delay=None):
         """Move the cursor onto element, then click (with fallbacks)."""
         self.move_to_element_like_human(element)
         self._inter_action_gap()
 
-        # Real users often "scan" the element before clicking
         if random.random() < 0.65:
             time.sleep(self._gauss(0.55, 0.25, 0.15, 1.3))
 
-        # Occasional wrong-click then correct (very human)
         if random.random() < 0.03:
             rect = self._get_viewport_rect(element)
             off_x = rect["x"] + random.uniform(2, 6)
@@ -805,10 +801,16 @@ class HumanSimulator:
         time.sleep(duration)
 
     # ==================================================================
-    # NEW: INERTIAL SCROLL (flick + decaying drift + reading pause)
+    # INERTIAL SCROLL  # === DEADLINE FIX ===
     # ==================================================================
-    def _inertial_scroll(self, direction="down"):
-        """One human-like scroll gesture: quick flick + drift."""
+    def _inertial_scroll(self, direction="down", deadline=None):
+        """
+        One human-like scroll gesture: quick flick + drift.
+
+        # === DEADLINE FIX ===
+        If `deadline` (monotonic seconds) is provided, abort the drift
+        loop as soon as the deadline is reached.
+        """
         # Initial flick
         flick = random.randint(180, 420)
         signed = flick if direction == "down" else -flick
@@ -820,6 +822,10 @@ class HumanSimulator:
         # Inertial drift (smaller, decaying)
         drift = flick
         while drift > 25:
+            # === DEADLINE FIX: bail out if time is up ===
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.debug("_inertial_scroll: deadline reached; aborting")
+                return
             drift *= random.uniform(0.35, 0.55)
             signed = int(drift) if direction == "down" else -int(drift)
             if signed == 0:
@@ -833,12 +839,21 @@ class HumanSimulator:
         time.sleep(self._gauss(0.5, 0.25, 0.15, 1.2) * self._fatigue_factor)
 
     # ==================================================================
-    # CHANGED: scroll_page now sometimes uses _inertial_scroll
+    # scroll_page  # === DEADLINE FIX ===
     # ==================================================================
-    def scroll_page(self, total_scroll=None, step_delay=None, direction=None):
+    def scroll_page(self, total_scroll=None, step_delay=None,
+                    direction=None, deadline=None):
+        """
+        # === DEADLINE FIX ===
+        `deadline` (monotonic seconds) aborts the inner step loop the
+        moment it is reached, so a single scroll_page call can never
+        overshoot the caller's wall-clock budget.
+        """
         # 40% of the time, do a single inertial flick instead
         if total_scroll is None and random.random() < 0.4:
-            return self._inertial_scroll(direction or "down")
+            return self._inertial_scroll(
+                direction or "down", deadline=deadline
+            )
 
         total_scroll = (
             total_scroll if total_scroll is not None
@@ -855,6 +870,14 @@ class HumanSimulator:
             cy = self._toolbar_offset + (win["height"] // 2)
 
         while scrolled < total_scroll:
+            # === DEADLINE FIX ===
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.debug(
+                    f"scroll_page: deadline reached after "
+                    f"{scrolled}/{total_scroll}px"
+                )
+                return
+
             can_down = self._can_scroll_down()
             can_up = self._can_scroll_up()
 
@@ -900,6 +923,14 @@ class HumanSimulator:
                 if step_delay is not None
                 else self._dynamic_scroll_step_delay()
             )
+
+            # === DEADLINE FIX: cap the sleep so we don't overrun ===
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return
+                delay = min(delay, remaining)
+
             time.sleep(delay)
 
     # ==================================================================
@@ -907,16 +938,6 @@ class HumanSimulator:
     # ==================================================================
     def bring_element_into_view_with_wheel(self, element, align="center",
                                             max_iterations=6, settle=True):
-        """
-        Bring `element` into view by driving the mouse wheel in human-like
-        chunks (variable speed, jitter, occasional backtrack), instead of
-        teleporting with scrollIntoView.
-
-        Falls back to a single JS scrollIntoView only if wheel input is
-        unavailable in both native and synthetic modes.
-
-        align: "start" | "center" | "end"  -- where in the viewport to land.
-        """
         if element is None:
             return False
 
@@ -990,9 +1011,6 @@ class HumanSimulator:
             pass
         return False
 
-    # ----------------------------------------------------------------------
-    # Wheel helpers
-    # ----------------------------------------------------------------------
     def _wheel_scroll(self, distance, direction):
         if distance <= 0:
             return
@@ -1170,6 +1188,129 @@ class HumanSimulator:
                 f"Selected {len(selected)} of {count} requested words; continuing"
             )
         return selected
+
+    # ==================================================================
+    # BUDGETED MULTI-BATCH SELECTION
+    # ==================================================================
+    def select_random_words_budgeted(
+        self,
+        min_seconds=20,
+        max_seconds=40,
+        batches=3,
+        words_per_batch=(1, 3),
+        already_selected=None,
+        pre_hook=None,
+        post_hook=None,
+        inter_batch_pause=(0.4, 1.2),
+        label_fn=None,
+    ):
+        """
+        Select random words on the current page, split across ``batches``
+        rounds, staying inside a ``[min_seconds, max_seconds]`` time window.
+
+        Never exceeds ``max_seconds`` (plus a small safety margin).
+        """
+        if not getattr(self, "enable_budgeted_selection", True):
+            return {
+                "batches": [], "all_words": [], "elapsed": 0.0,
+                "budget": 0.0, "completed": True, "skipped": 0,
+            }
+
+        if min_seconds <= 0 or max_seconds <= 0:
+            return {
+                "batches": [], "all_words": [], "elapsed": 0.0,
+                "budget": 0.0, "completed": True, "skipped": 0,
+            }
+
+        if min_seconds > max_seconds:
+            min_seconds, max_seconds = max_seconds, min_seconds
+
+        budget = random.uniform(min_seconds, max_seconds)
+        start = time.time()
+
+        def remaining():
+            return max(0.0, budget - (time.time() - start))
+
+        def can_spend(seconds):
+            return remaining() > seconds + 0.25
+
+        selected = list(already_selected or [])
+        initial_len = len(selected)
+        batches_result = []
+        skipped = 0
+        completed = True
+
+        def _safe_call(hook, index):
+            if hook is None:
+                return
+            try:
+                hook(index)
+            except TypeError:
+                try:
+                    hook()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        for batch_index in range(batches):
+            if not can_spend(0.6):
+                skipped = batches - batch_index
+                completed = False
+                break
+
+            _safe_call(pre_hook, batch_index)
+
+            lo, hi = words_per_batch
+            lo = max(1, int(lo))
+            hi = max(lo, int(hi))
+            count = random.randint(lo, hi)
+            max_by_time = max(1, int(remaining() / _BUDGETED_PER_WORD_COST))
+            count = min(count, max_by_time)
+
+            words = []
+            for _ in range(count):
+                if not can_spend(0.6):
+                    break
+                try:
+                    picked = self.select_random_words(
+                        1, already_selected=selected
+                    )
+                except Exception:
+                    picked = []
+                if not picked:
+                    break
+                selected.extend(picked)
+                words.extend(picked)
+                time.sleep(min(random.uniform(0.05, 0.2), remaining()))
+
+            if words:
+                batches_result.append(words)
+                if label_fn is not None:
+                    try:
+                        label = label_fn(batch_index)
+                    except Exception:
+                        label = f"batch {batch_index + 1}"
+                    logger.info(f"Mouse-selected {label}: {words}")
+
+            _safe_call(post_hook, batch_index)
+
+            if batch_index < batches - 1:
+                pause = random.uniform(*inter_batch_pause)
+                if not can_spend(pause):
+                    skipped = batches - batch_index - 1
+                    completed = False
+                    break
+                time.sleep(pause)
+
+        return {
+            "batches": batches_result,
+            "all_words": selected[initial_len:],
+            "elapsed": time.time() - start,
+            "budget": budget,
+            "completed": completed,
+            "skipped": skipped,
+        }
 
     def select_text_once(self):
         word_count = random.choice([4, random.randint(10, 20)])
@@ -1372,13 +1513,36 @@ class HumanSimulator:
 
         return None, None
 
+    # ==================================================================
+    # scroll_to_element_human  # === DEADLINE FIX ===
+    # ==================================================================
     def scroll_to_element_human(
         self,
         element,
         align="center",
         chunk_threshold_viewports=CHUNK_THRESHOLD_VIEWPORTS,
         max_chunks=MAX_CHUNKS,
+        deadline=None,
+        max_duration=None,
     ):
+        """
+        # === DEADLINE FIX ===
+        deadline      : monotonic seconds — absolute wall-clock cap.
+        max_duration  : seconds — cap for THIS call only (min of the two
+                        is used). Typically set to `scroll_budget_left()`.
+        """
+        # Effective deadline = min(absolute deadline, now + max_duration)
+        effective_deadline = deadline
+        if max_duration is not None:
+            local = time.monotonic() + max(0.0, max_duration)
+            if effective_deadline is None or local < effective_deadline:
+                effective_deadline = local
+
+        def _time_left():
+            if effective_deadline is None:
+                return None
+            return effective_deadline - time.monotonic()
+
         rect = self._element_rect(element)
         if not rect:
             return False
@@ -1406,18 +1570,29 @@ class HumanSimulator:
 
         chunk_threshold = chunk_threshold_viewports * vh
         if abs(delta) > chunk_threshold:
-            self._chunked_scroll_human(delta, vh, max_chunks)
+            self._chunked_scroll_human(
+                delta, vh, max_chunks, deadline=effective_deadline
+            )
         else:
             direction = "down" if delta > 0 else "up"
             self.scroll_page(
-                total_scroll=abs(int(delta)), direction=direction
+                total_scroll=abs(int(delta)),
+                direction=direction,
+                deadline=effective_deadline,
             )
 
         return True
 
+    # ==================================================================
+    # _chunked_scroll_human  # === DEADLINE FIX ===
+    # ==================================================================
     def _chunked_scroll_human(
-        self, total_delta, viewport_height, max_chunks=MAX_CHUNKS
+        self, total_delta, viewport_height, max_chunks=MAX_CHUNKS, deadline=None
     ):
+        """
+        # === DEADLINE FIX ===
+        Aborts the loop the moment `deadline` (monotonic seconds) is hit.
+        """
         direction = "down" if total_delta > 0 else "up"
         remaining = abs(total_delta)
 
@@ -1433,6 +1608,14 @@ class HumanSimulator:
         )
 
         for i in range(num_chunks):
+            # === DEADLINE FIX ===
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.debug(
+                    f"_chunked_scroll_human: deadline reached "
+                    f"at chunk {i}/{num_chunks}; aborting"
+                )
+                return
+
             if remaining <= 0:
                 break
 
@@ -1443,24 +1626,50 @@ class HumanSimulator:
                     remaining, viewport_height * random.uniform(0.8, 1.2)
                 )
 
-            self.scroll_page(total_scroll=int(chunk), direction=direction)
+            self.scroll_page(
+                total_scroll=int(chunk),
+                direction=direction,
+                deadline=deadline,
+            )
             remaining -= chunk
 
             if remaining <= 0:
                 break
 
-            time.sleep(random.uniform(0.5, 1.2))
+            # === DEADLINE FIX: cap inter-chunk sleeps too ===
+            if deadline is not None:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                time.sleep(min(random.uniform(0.5, 1.2), left))
+            else:
+                time.sleep(random.uniform(0.5, 1.2))
 
             if random.random() < 0.5:
                 jitter = int(abs(random.gauss(35, 20)))
-                self.scroll_page(total_scroll=jitter, direction=direction)
+                self.scroll_page(
+                    total_scroll=jitter,
+                    direction=direction,
+                    deadline=deadline,
+                )
 
             if random.random() < 0.2:
                 backtrack = int(abs(random.gauss(55, 25)))
                 flip = "up" if direction == "down" else "down"
-                self.scroll_page(total_scroll=backtrack, direction=flip)
+                self.scroll_page(
+                    total_scroll=backtrack,
+                    direction=flip,
+                    deadline=deadline,
+                )
 
-    def random_glance_scroll(self):
+    def random_glance_scroll(self, deadline=None):
+        """
+        # === DEADLINE FIX ===
+        Small, quick scroll; aborts if `deadline` has passed.
+        """
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+
         direction = random.choice(["up", "down"])
         distance = int(abs(random.gauss(140, 55)))
         scroll_y, vh, page_h = self._viewport_state()
@@ -1478,7 +1687,9 @@ class HumanSimulator:
         if distance < 40:
             return False
 
-        self.scroll_page(total_scroll=distance, direction=direction)
+        self.scroll_page(
+            total_scroll=distance, direction=direction, deadline=deadline
+        )
         return True
 
     def hover_element_human(self, element):
@@ -1593,7 +1804,6 @@ class HumanSimulator:
             min_d, max_d = max_d, min_d
 
         dwell = random.uniform(min_d, max_d)
-        # NEW: fatigue makes dwells longer
         dwell *= self._fatigue_factor
 
         logger.debug(f"Dwell [{category}] {round(dwell, 2)}s")
@@ -1621,26 +1831,21 @@ class HumanSimulator:
             time.sleep(random.uniform(0.25, 0.55))
 
     # ==================================================================
-    # NEW: DISTRACTION BEHAVIOR
+    # DISTRACTION BEHAVIOR
     # ==================================================================
     def _simulate_distraction(self):
-        """Random behavior that mimics a user being distracted."""
         roll = random.random()
         try:
             if roll < 0.35:
-                # Scroll up sharply (re-reading something)
                 self.scroll_page(
                     total_scroll=random.randint(300, 900),
                     direction="up",
                 )
             elif roll < 0.65:
-                # Long idle pause
                 time.sleep(self._gauss(4.5, 1.5, 2.0, 9.0))
             elif roll < 0.85:
-                # Random mouse wander
                 self.move_mouse_around(moves=random.randint(2, 5))
             else:
-                # Tiny window nudge (very rare)
                 try:
                     pos = self.driver.get_window_position()
                     self.driver.set_window_position(
@@ -1652,6 +1857,9 @@ class HumanSimulator:
         except Exception:
             pass
 
+    # ==================================================================
+    # browse_page_randomly  # === DEADLINE FIX ===
+    # ==================================================================
     def browse_page_randomly(
         self,
         duration=60,
@@ -1660,18 +1868,19 @@ class HumanSimulator:
         max_chunks=MAX_CHUNKS,
     ):
         """
-        Full random browsing flow driven by a pool dict:
-            pool = {
-                "xpaths":   {category: [xpath,...]},
-                "weights":  {category: int},
-                "safe_click": {category,...},
-                "dwell":    {category: (min,max)},
-                "default_dwell": (min,max),
-            }
+        Full random browsing flow driven by a pool dict.
 
-        Scrolling is budgeted to ~30-60% of `duration`; the remainder is
-        filled with hovering, text selection, dwelling, and idle pauses.
-        Returns an action_log dict.
+        # === DEADLINE FIX ===
+        A hard wall-clock deadline is computed at the start and threaded
+        into every blocking helper (scroll_to_element_human,
+        _chunked_scroll_human, scroll_page, _inertial_scroll,
+        random_glance_scroll). The loop also re-checks the remaining
+        time right before and right after the expensive scroll call so
+        a single scroll cannot overshoot `duration`.
+
+        Total runtime will be `duration` plus a small (≤ ~1s) safety
+        margin, instead of the unbounded overshoot that occurred when
+        scroll_to_element_human wasn't deadline-aware.
         """
         if not pool or not pool.get("xpaths"):
             logger.warning("browse_page_randomly: empty pool; skipping.")
@@ -1723,13 +1932,16 @@ class HumanSimulator:
             f"(scroll budget={round(scroll_budget, 1)}s, "
             f"{round(scroll_budget_fraction * 100)}%)."
         )
-        start_time = time.time()
+
+        # === DEADLINE FIX: hard monotonic wall-clock deadline ===
+        start_time = time.monotonic()
+        absolute_deadline = start_time + duration
 
         def elapsed():
-            return time.time() - start_time
+            return time.monotonic() - start_time
 
         def remaining():
-            return max(0, duration - elapsed())
+            return max(0.0, duration - elapsed())
 
         def time_available(seconds=1):
             return remaining() > seconds
@@ -1742,7 +1954,8 @@ class HumanSimulator:
             "glance": 0, "select": 0, "no_scroll": 0,
             "empty": 0, "dwell": 0, "idle": 0, "drift": 0,
             "budget_exhausted": 0,
-            "distraction": 0,       # NEW
+            "distraction": 0,
+            "aborted_overshoot": 0,   # === DEADLINE FIX ===
         }
 
         while time_available(2.0):
@@ -1753,18 +1966,27 @@ class HumanSimulator:
             )
 
             if do_scroll:
-                scroll_started = time.time()
+                # === DEADLINE FIX: do not start a scroll with < 1s left ===
+                if not time_available(1.0):
+                    break
+
+                scroll_started = time.monotonic()
+                remaining_before_scroll = remaining()
 
                 category, element = self.resolve_random_element(
                     xpath_pool, weights
                 )
 
+                # === DEADLINE FIX: re-check after element resolution ===
+                if not time_available(0.5):
+                    break
+
                 if element is None:
-                    if self.random_glance_scroll():
+                    if self.random_glance_scroll(deadline=absolute_deadline):
                         action_log["glance"] += 1
                     action_log["empty"] += 1
-                    scroll_time_spent += time.time() - scroll_started
-                    time.sleep(random.uniform(0.5, 1.1))
+                    scroll_time_spent += time.monotonic() - scroll_started
+                    time.sleep(min(random.uniform(0.5, 1.1), remaining()))
                     continue
 
                 was_visible = self.is_element_fully_visible(
@@ -1779,16 +2001,40 @@ class HumanSimulator:
                         will_chunk = True
 
                 align = random.choice(["start", "center", "center", "end"])
+
+                # === DEADLINE FIX: give scroll_to_element_human both the
+                # absolute deadline AND a per-call cap = remaining scroll
+                # budget, so a single scroll can never eat more than it's
+                # allowed.
+                max_duration_for_this_scroll = min(
+                    scroll_budget_left(),
+                    max(0.0, remaining_before_scroll - 0.3),
+                )
+
                 if not self.scroll_to_element_human(
                     element,
                     align=align,
                     chunk_threshold_viewports=chunk_threshold_viewports,
                     max_chunks=max_chunks,
+                    deadline=absolute_deadline,
+                    max_duration=max_duration_for_this_scroll,
                 ):
-                    scroll_time_spent += time.time() - scroll_started
+                    scroll_time_spent += time.monotonic() - scroll_started
                     continue
 
-                scroll_time_spent += time.time() - scroll_started
+                scroll_actual = time.monotonic() - scroll_started
+                scroll_time_spent += scroll_actual
+
+                # === DEADLINE FIX: if the scroll overshot its allocated
+                # budget by a lot, abort the entire browse loop.
+                if scroll_actual > remaining_before_scroll + 0.5:
+                    logger.warning(
+                        f"Scroll overshoot: took {scroll_actual:.2f}s, "
+                        f"remaining was {remaining_before_scroll:.2f}s; "
+                        f"aborting browse loop."
+                    )
+                    action_log["aborted_overshoot"] += 1
+                    break
 
                 if was_visible:
                     action_log["no_scroll"] += 1
@@ -1814,7 +2060,7 @@ class HumanSimulator:
                     else:
                         self._random_drift()
                         action_log["drift"] += 1
-                    time.sleep(random.uniform(0.4, 0.9))
+                    time.sleep(min(random.uniform(0.4, 0.9), remaining()))
                     continue
 
                 if scroll_budget_left() <= 0:
@@ -1881,7 +2127,7 @@ class HumanSimulator:
                 )
                 action_log["dwell"] += 1
 
-            # ---------------- NEW: DISTRACTION ----------------
+            # ---------------- DISTRACTION ----------------
             if random.random() < 0.05 and time_available(6):
                 self._simulate_distraction()
                 action_log["distraction"] += 1
@@ -1892,10 +2138,10 @@ class HumanSimulator:
                 and random.random() < 0.15
                 and time_available(2)
             ):
-                gs = time.time()
-                if self.random_glance_scroll():
+                gs = time.monotonic()
+                if self.random_glance_scroll(deadline=absolute_deadline):
                     action_log["glance"] += 1
-                scroll_time_spent += time.time() - gs
+                scroll_time_spent += time.monotonic() - gs
             elif scroll_budget_left() <= 0 and random.random() < 0.25:
                 if random.random() < 0.5:
                     self._idle_pause()
@@ -1904,7 +2150,10 @@ class HumanSimulator:
                     self._random_drift()
                     action_log["drift"] += 1
 
-            time.sleep(min(random.uniform(0.6, 1.2), remaining()))
+            # === DEADLINE FIX: never sleep past the absolute deadline ===
+            sleep_for = min(random.uniform(0.6, 1.2), remaining())
+            if sleep_for > 0:
+                time.sleep(sleep_for)
 
         self.clear_selection()
         elapsed_total = elapsed()

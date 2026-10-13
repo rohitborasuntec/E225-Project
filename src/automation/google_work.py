@@ -315,7 +315,7 @@ class GoogleSearch:
                         f"for query '{query}'"
                     )
                 self.human_simulator.browse_page_randomly(
-                    duration=10, pool=GOOGLE_RESULTS_POOL
+                    duration=5, pool=GOOGLE_RESULTS_POOL
                 )
 
     def get_google(self, query=None, blocked=False):
