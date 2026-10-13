@@ -55,11 +55,12 @@ def check_for_block(driver):
 #         return True
 #     return False
 
-def wait_for_element(driver, locator, timeout=10, condition="visible", poll=0.5):
+def wait_for_element(driver, locator, timeout=10, condition="visible", poll=0.5, raise_on_timeout=False):
     conditions = {
         "presence":  EC.presence_of_element_located,
         "visible":   EC.visibility_of_element_located,
         "clickable": EC.element_to_be_clickable,
+        "invisible": EC.invisibility_of_element_located,
     }
     if condition not in conditions:
         raise ValueError(f"Unknown condition: {condition}")
@@ -67,33 +68,40 @@ def wait_for_element(driver, locator, timeout=10, condition="visible", poll=0.5)
     try:
         return wait.until(conditions[condition](locator))
     except TimeoutException:
+        if raise_on_timeout:
+            raise
         return None
 
-
 def get_random_word_or_sentence_faker(option):
+
     fake = Faker()
     curr_yr = datetime.now().year
     year = randint(1950, curr_yr)
+
     if option == 'word':
         element = ["meaning","adjective","noun","verb","adverb","pronoun","preposition","conjunction","interjection"]
         return f"{fake.word()} {random.choice(element)}"
     if option == 'name':
-        return fake.name()
+        element = ["","history","biography","profile","story","life story","autobiography"]
+        return f"{fake.name()} {random.choice(element)}"
     if option == 'country':
         element = ["gdp", "population", "capital", "currency", "flag"," language","religion"," climate","tourist attractions"]
         return f"{random.choice(element)} of {fake.country()}?"
     if option == 'movie':
-        return f"must watch movies {year}"
+        element = ["new", "latest", "top", "best", "popular", "trending","must watch","award winning","blockbuster"]
+        return f"{random.choice(element)} movies of {year}"
     if option == 'music':
-        return f"latest playlist for {year}"
+        element = ["new", "latest", "top", "best", "popular", "trending"]
+        return f"{random.choice(element)} playlist for {year}"
     if option == 'sports':
-        sports = ["cricket", "football", "","basketball", "tennis", "hockey", "baseball", "golf", "rugby", "volleyball"]
+        sports = ["cricket", "football","basketball", "tennis", "hockey", "baseball", "golf", "rugby", "volleyball",]
         return f"{random.choice(sports)} match live score"
     if option == 'technology':
         element = ["latest gadgets", "tech news", "AI advancements", "software updates", "hardware reviews"]
         return f"{random.choice(element)} in {year}"
     if option == 'News':
         return f"{fake.city()} news"
+    
     return option
 
 

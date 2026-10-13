@@ -22,8 +22,8 @@ MAX_CHUNKS = 5
 
 # ---- Pacing & scroll-budget controls ----
 # Scrolling should only consume ~30-60% of total browsing time.
-SCROLL_TIME_FRACTION_MIN = 0.30
-SCROLL_TIME_FRACTION_MAX = 0.60
+SCROLL_TIME_FRACTION_MIN = 0.23
+SCROLL_TIME_FRACTION_MAX = 0.49
 
 # If scrolling has already eaten its budget, non-scroll actions get
 # this much extra weight when picking the next action.

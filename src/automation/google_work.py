@@ -19,200 +19,6 @@ class GoogleSearch:
 
     # ---------------- captcha solving ---------------- #
 
-    # def solve_captcha(
-    #     self,
-    #     api_key: str | None = None,
-    #     *,
-    #     max_retries: int = 3,
-    #     retry_delay: int = 5,
-    #     submit: bool = True,
-    # ) -> str | None:
-
-    #     import os
-    #     import time
-    #     from twocaptcha import TwoCaptcha, ApiException
-    #     from selenium.webdriver.common.by import By
-
-
-    #     if self.driver is None:
-    #         raise RuntimeError(
-    #             "No active browser. Call Browser.launch() first."
-    #         )
-
-    #     api_key = api_key or os.environ.get("APIKEY_2CAPTCHA")
-    #     if not api_key:
-    #         raise ValueError(
-    #             "2Captcha API key missing. Pass api_key= or set "
-    #             "APIKEY_2CAPTCHA env var."
-    #         )
-
-    #     solver = TwoCaptcha(api_key)
-    #     driver = self.driver
-    #     url = driver.current_url
-
-    #     # ---------- extract sitekey ----------
-    #     try:
-    #         sitekey = driver.execute_script("""
-    #             const el = document.querySelector('[data-sitekey]');
-    #             if (el) return el.getAttribute('data-sitekey');
-    #             const iframe = document.querySelector(
-    #                 'iframe[src*="recaptcha"]'
-    #             );
-    #             if (iframe) {
-    #                 const m = iframe.src.match(/[?&]k=([^&]+)/);
-    #                 if (m) return decodeURIComponent(m[1]);
-    #             }
-    #             return null;
-    #         """)
-    #     except Exception as exc:
-    #         print(f"[captcha] sitekey extraction failed: {exc}")
-    #         sitekey = None
-
-    #     if not sitekey:
-    #         print("[captcha] No reCAPTCHA sitekey found on this page.")
-    #         return None
-    #     print(f"[captcha] Found sitekey: {sitekey}")
-
-    #     # ---------- extract data-s (Google Search) ----------
-    #     try:
-    #         data_s = driver.execute_script("""
-    #             const el = document.querySelector('[data-s]');
-    #             if (el) return el.getAttribute('data-s');
-    #             const iframe = document.querySelector(
-    #                 'iframe[src*="recaptcha"]'
-    #             );
-    #             if (iframe) {
-    #                 const m = iframe.src.match(/[?&]s=([^&]+)/);
-    #                 if (m) return m[1];
-    #             }
-    #             const scripts = document.querySelectorAll('script');
-    #             for (const s of scripts) {
-    #                 const m = s.textContent.match(
-    #                     /data-s["']?\\s*[:=]\\s*["']([^"']+)["']/
-    #                 );
-    #                 if (m) return m[1];
-    #             }
-    #             return null;
-    #         """)
-    #     except Exception:
-    #         data_s = None
-
-    #     if data_s:
-    #         print(f"[captcha] Found data-s: {data_s[:20]}...")
-
-
-    #     # ---------- solve with retries ----------
-    #     token = None
-    #     for attempt in range(1, max_retries + 1):
-    #         try:
-    #             print(f"[captcha] Attempt {attempt}/{max_retries}...")
-    #             params = {"sitekey": sitekey, "url": url}
-    #             if data_s:
-    #                 params["datas"] = data_s
-
-    #             result = solver.recaptcha(**params)
-    #             token = result["code"]
-    #             print("[captcha] Solved successfully.")
-    #             break
-
-    #         except ApiException as exc:
-    #             msg = str(exc)
-    #             if (
-    #                 "cannot recognize response" in msg
-    #                 or "ERROR_CAPTCHA_UNSOLVABLE" in msg
-    #                 or "ERROR_NO_SLOT_AVAILABLE" in msg
-    #             ):
-    #                 print(
-    #                     f"[captcha] Transient error, retrying in "
-    #                     f"{retry_delay}s: {msg[:80]}"
-    #                 )
-    #                 time.sleep(retry_delay)
-    #                 if data_s:
-    #                     try:
-    #                         data_s = self.driver.execute_script("""
-    #                             const el = document.querySelector('[data-s]');
-    #                             return el ? el.getAttribute('data-s') : null;
-    #                         """)
-    #                     except Exception:
-    #                         pass
-    #             else:
-    #                 print(f"[captcha] Fatal API error: {msg}")
-    #                 return None
-
-    #         except Exception as exc:
-    #             print(f"[captcha] Unexpected error: {exc}")
-    #             return None
-
-    #     if not token:
-    #         print("[captcha] Failed to obtain token after retries.")
-    #         return None
-
-    #     # ---------- inject token ----------
-    #     try:
-    #         driver.execute_script("""
-    #             const el = document.getElementById('g-recaptcha-response');
-    #             if (!el) return;
-    #             el.value = arguments[0];
-    #             el.innerHTML = arguments[0];
-    #             el.dispatchEvent(new Event('input',  { bubbles: true }));
-    #             el.dispatchEvent(new Event('change', { bubbles: true }));
-    #         """, token)
-
-    #         # Fire the callback declared on the widget, if any
-    #         callback = driver.execute_script("""
-    #             const el = document.querySelector('[data-callback]');
-    #             return el ? el.getAttribute('data-callback') : null;
-    #         """)
-    #         if callback:
-    #             try:
-    #                 driver.execute_script(
-    #                     f"window['{callback}'](arguments[0]);", token
-    #                 )
-    #             except Exception as exc:
-    #                 print(f"[captcha] Callback '{callback}' failed: {exc}")
-    #     except Exception as exc:
-    #         print(f"[captcha] Token injection failed: {exc}")
-    #         return None
-
-    #     # ---------- submit ----------
-    #     if submit:
-    #         try:
-    #             btn = driver.find_element(
-    #                 By.CSS_SELECTOR,
-    #                 "button[type='submit'], input[type='submit'], #recaptcha-verify-button",
-    #             )
-    #             btn.click()
-    #             print("[captcha] Submitted form.")
-    #         except Exception:
-    #             # Many Google CAPTCHAs auto-submit after the callback fires.
-    #             print("[captcha] No submit button found; relying on callback.")
-
-    #     return token
-
-    # def check_for_bot(self):
-    #     captcha = '//*[contains(.,"Sometimes you may be asked to solve the CAPTCHA")]'
-    #     if self.driver.find_elements(By.XPATH, captcha):
-    #         logger.warning("Bot detected!")
-    #         token = self.solve_captcha(api_key="abc")
-
-    #         self.driver.execute_script("""
-    #         const el = document.getElementById('g-recaptcha-response');
-    #         if (el) {
-    #             el.value = arguments[0];
-    #             el.dispatchEvent(new Event('input', { bubbles: true }));
-    #             el.dispatchEvent(new Event('change', { bubbles: true }));
-    #         }
-    #     """, token)
-
-    #     try:
-    #         submit_btn = self.driver.find_element(By.CSS_SELECTOR, "button[type='submit'], input[type='submit']")
-    #         submit_btn.click()
-    #     except:
-
-    #         pass
-
-    # ---------------- captcha solving ---------------- #
-
     def solve_captcha(
         self,
         api_key: str | None = None,
@@ -377,7 +183,7 @@ class GoogleSearch:
         solve it. Returns True if a CAPTCHA was found and handled,
         False otherwise.
         """
-
+        # input("Catcha check: Press Enter to continue...")
         try:
             api_key = os.environ.get("APIKEY_2CAPTCHA")
         except Exception as exc:
@@ -477,7 +283,7 @@ class GoogleSearch:
                     self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
                     logger.info(f"Reject All done")
                 
-                save_html(html_text=self.driver.page_source, file_name=query)
+                # save_html(html_text=self.driver.page_source, file_name=query)
 
                 clicked = False
                 for attempt in range(7):

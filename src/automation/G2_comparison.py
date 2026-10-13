@@ -26,7 +26,7 @@ class G2Comparison:
     # OPEN G2 COMPARE PAGE
     # ==================================================================
     def open_g2_compare_page(self):
-        save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}.html")
+        # save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}.html")
 
         # Cookie banner
         try:

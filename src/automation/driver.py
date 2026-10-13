@@ -32,7 +32,7 @@ Performance notes (v2)
 """
 
 from __future__ import annotations
-
+from src.logging import logger
 import os
 import platform
 import random
@@ -458,19 +458,19 @@ class Browser:
             )
 
         self.browser_name = key
-        print(f"[Browser] Starting {requested}...")
+        logger.info(f"[Browser] Starting {requested}...")
 
         t0 = time.perf_counter()
         try:
             self.driver = mapping[key]()
         except Exception as error:
-            print(f"[Browser] Failed to start {requested}: {error}")
+            logger.error(f"[Browser] Failed to start {requested}: {error}")
             self.driver = None
             self.browser_name = None
             raise
 
         elapsed = time.perf_counter() - t0
-        print(f"[Browser] {requested} started successfully in {elapsed:.2f}s.")
+        logger.info(f"[Browser] {requested} started successfully in {elapsed:.2f}s.")
         return self.driver, requested
 
     # ---------------- chrome / brave ---------------- #
@@ -486,7 +486,7 @@ class Browser:
             if not m or kwargs.get("version_main") == int(m.group(1)):
                 raise
             major = int(m.group(1))
-            print(f"[uc] Driver/browser mismatch, retrying with version_main={major}")
+            logger.info(f"[uc] Driver/browser mismatch, retrying with version_main={major}")
             # UC options objects can't be reused after a failed start
             kwargs = {**kwargs, "version_main": major}
             opts = kwargs["options"]
@@ -635,44 +635,6 @@ class Browser:
 
     # ---------------- firefox ---------------- #
 
-    @staticmethod
-    def _load_undetected_firefox(firefox_install_dir: str | None):
-        """
-        Load undetected-geckodriver and make it recognize the
-        manually installed Mozilla Firefox directory.
-        """
-        try:
-            import undetected_geckodriver.constants as ug_constants
-            from undetected_geckodriver import Firefox as UndetectedFirefox
-        except Exception as exc:
-            print(f"[firefox] Could not import undetected-geckodriver: {exc}")
-            return None
-
-        try:
-            if firefox_install_dir:
-                table = ug_constants.WINDOWS if IS_WINDOWS else ug_constants.LINUX
-                if isinstance(table, dict) and "firefox_paths" in table:
-                    paths = list(table["firefox_paths"])
-                    if firefox_install_dir not in paths:
-                        paths.insert(0, firefox_install_dir)
-                    table["firefox_paths"] = paths
-                elif hasattr(table, "firefox_paths"):
-                    paths = list(table.firefox_paths)
-                    if firefox_install_dir not in paths:
-                        paths.insert(0, firefox_install_dir)
-                    table.firefox_paths = paths
-
-                print(
-                    f"[firefox] undetected-geckodriver loaded "
-                    f"(install dir: {firefox_install_dir})"
-                )
-            else:
-                print("[firefox] undetected-geckodriver loaded (no path patch)")
-        except Exception as exc:
-            print(f"[firefox] Could not patch undetected-geckodriver paths: {exc}")
-
-        return UndetectedFirefox
-
     def get_firefox(self):
         options = FirefoxOptions()
 
@@ -684,7 +646,7 @@ class Browser:
                 "firefox_install_dir= to Browser()."
             )
         options.binary_location = firefox_binary
-        print(f"[firefox] Using Firefox binary: {firefox_binary}")
+        logger.info(f"[firefox] Using Firefox binary: {firefox_binary}")
 
         # ---------- Headless ----------
         if self.headless:
@@ -710,45 +672,67 @@ class Browser:
         # ---------- Private browsing ----------
         options.add_argument("-private")
 
-        # ---------- Try undetected-geckodriver first ----------
-        if self.use_undetected_firefox:
-            install_dir = os.path.dirname(firefox_binary)
-            UndetectedFirefox = self._load_undetected_firefox(install_dir)
+        # ---------- undetected-geckodriver ONLY (no fallback) ----------
+        install_dir = os.path.dirname(firefox_binary)
+        UndetectedFirefox = self._load_undetected_firefox(install_dir)
 
-            if UndetectedFirefox is not None:
-                try:
-                    print("[firefox] Starting undetected Firefox...")
-                    driver = UndetectedFirefox(options=options)
-                    self._finalize(driver)
-                    return driver
-                except Exception as exc:
-                    print(
-                        f"[firefox] undetected-geckodriver failed; "
-                        f"fallback: {exc}"
-                    )
-
-        # ---------- Normal Selenium Firefox ----------
-        # Selenium Manager resolves geckodriver (cached under ~/.cache/selenium).
-        print("[firefox] Starting Selenium Firefox...")
-        driver = webdriver.Firefox(options=options)
-
-        try:
-            driver.execute_script(
-                """
-                Object.defineProperty(
-                    Navigator.prototype,
-                    'webdriver',
-                    { get: () => undefined }
-                );
-                """
+        if UndetectedFirefox is None:
+            raise RuntimeError(
+                "undetected-geckodriver is required for Firefox but could not "
+                "be imported. Install it with: pip install undetected-geckodriver"
             )
-        except Exception:
-            pass
+
+        logger.info("[firefox] Starting undetected Firefox...")
+        try:
+            driver = UndetectedFirefox(options=options)
+        except Exception as exc:
+            logger.error(f"[firefox] undetected-geckodriver failed to start: {exc}")
+            raise
 
         self._finalize(driver)
         return driver
-
     # ---------------- human helpers ---------------- #
+
+    @staticmethod
+    def _load_undetected_firefox(firefox_install_dir: str | None):
+        """
+        Load undetected-geckodriver and register this machine's Firefox
+        install dir. The package only ships a Linux entry, so on Windows
+        we inject one (mirrors the commented-out block in its constants.py).
+        """
+        try:
+            import undetected_geckodriver.constants as ug_constants
+            from undetected_geckodriver import Firefox as UndetectedFirefox
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not import undetected-geckodriver: {exc}. "
+                "Install it with: pip install undetected-geckodriver"
+            ) from exc
+
+        params_table = ug_constants.PLATFORM_DEPENDENT_PARAMS
+        system = platform.system()
+
+        if system == "Windows" and "Windows" not in params_table:
+            local_appdata = os.environ.get(
+                "LOCALAPPDATA", str(Path.home() / "AppData" / "Local")
+            )
+            params_table["Windows"] = {
+                "firefox_execs": ["firefox.exe"],
+                "firefox_paths": [],
+                "undetected_path": os.path.join(local_appdata, "undetected_firefox") + "\\",
+                "xul": "xul.dll",
+            }
+
+        if system not in params_table:
+            raise RuntimeError(f"undetected-geckodriver has no support for {system}")
+
+        if firefox_install_dir:
+            paths = params_table[system]["firefox_paths"]
+            if firefox_install_dir not in paths:
+                paths.insert(0, firefox_install_dir)   # mutate in place
+
+        logger.info(f"[firefox] undetected-geckodriver ready (install dir: {firefox_install_dir})")
+        return UndetectedFirefox
 
     @staticmethod
     def human_type(driver, css_selector: str, text: str, wpm: int = 220):
@@ -789,14 +773,15 @@ class Browser:
     # ---------------- cleanup ---------------- #
 
     def quit(self, browser_name: str | None = None):
+        
         name = (browser_name or self.browser_name or "").lower()
 
         if self.driver:
             try:
                 self.driver.quit()
-                print("WebDriver quit successfully.")
+                logger.info("WebDriver quit successfully.")
             except Exception as exc:
-                print(f"driver.quit() error: {exc}")
+                logger.error(f"driver.quit() error: {exc}")
             finally:
                 self.driver = None
 
@@ -804,7 +789,7 @@ class Browser:
             try:
                 self._opera_service.stop()
             except Exception as exc:
-                print(f"operadriver service.stop() error: {exc}")
+                logger.error(f"operadriver service.stop() error: {exc}")
             finally:
                 self._opera_service = None
 
@@ -825,8 +810,8 @@ if __name__ == "__main__":
             manager.human_type(driver, selector, "python tutorial")
             driver.find_element(By.CSS_SELECTOR, selector).send_keys(Keys.ENTER)
         except Exception as exc:
-            print(f"[demo] Search interaction failed: {exc}")
+            logger.error(f"[demo] Search interaction failed: {exc}")
         time.sleep(random.uniform(2.0, 4.0))
-        print(f"Browser: {launched}\nTitle: {driver.title}")
+        logger.info(f"Browser: {launched}\nTitle: {driver.title}")
     finally:
         manager.quit(launched)

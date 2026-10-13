@@ -27,7 +27,6 @@ MAX_VPN_ATTEMPTS     = 20   # VPN locations to try per attempt
 VPN_SETTLE_WAIT      = 5    # after connect, before opening browser
 POST_DISCONNECT_WAIT = 3    # after disconnect, before next connect/browser
 
-
 # --------------------------------------------------------------------------
 # G2 automation
 # --------------------------------------------------------------------------
@@ -208,7 +207,7 @@ def run_pair(product, comparing_product, vpn, location_manager):
 
         except Exception:
             logger.exception(f"{product}/{comparing_product} crashed (not retryable).")
-            return False
+            # return False
 
         #     G2Automation(driver, human_simulator, gs).run_g2(
         #         product, comparing_product, browser, location
@@ -241,7 +240,7 @@ def run_pair(product, comparing_product, vpn, location_manager):
                 try:
                     manager.quit(browser_name=browser)
                 except Exception:
-                    pass
+                    logger.exception(f"Failed to quit browser {browser} cleanly.")
             safe_disconnect(vpn)
             time.sleep(POST_DISCONNECT_WAIT)
 

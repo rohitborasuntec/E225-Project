@@ -779,12 +779,21 @@ class G2Page:
         )
 
     def close_login_modal_if_present(self, timeout=1):
-        try:
-            modal = WebDriverWait(self.driver, timeout, poll_frequency=0.1).until(
-                EC.visibility_of_element_located((By.ID, "login-modal"))
-            )
-        except TimeoutException:
+        # try:
+        #     modal = WebDriverWait(self.driver, timeout, poll_frequency=0.1).until(
+        #         EC.visibility_of_element_located((By.ID, "login-modal"))
+        #     )
+        modal = wait_for_element(
+            self.driver,
+            (By.ID, "login-modal"),
+            timeout=timeout,
+            condition="visible",
+            poll=0.1,
+        )
+        if modal is None:
             return False
+        # except TimeoutException:
+        #     return False
 
         buttons = modal.find_elements(By.CSS_SELECTOR, "button")
         visible_buttons = [b for b in buttons if b.is_displayed()]
@@ -798,11 +807,19 @@ class G2Page:
                 key=lambda b: b.rect["x"] - b.rect["y"],
             )
 
-        actions = ActionChains(self.driver)
-        actions.move_to_element(close_button).pause(0.05).click().perform()
-        WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
-            EC.invisibility_of_element_located((By.ID, "login-modal"))
-        )
+        # actions = ActionChains(self.driver)
+        # actions.move_to_element(close_button).pause(0.05).click().perform()
+        # self.human_simulator.mouse_hover(close_button)
+        self.human_simulator.mouse_click_after_hover(close_button)
+        # WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
+        #     EC.invisibility_of_element_located((By.ID, "login-modal"))
+        # )
+        wait_for_element(
+            self.driver,
+            (By.ID, "login-modal"),
+            timeout=2,
+            condition="invisible",
+            poll=0.1)
         logger.info("Closed G2 login modal")
         return True
 
@@ -840,7 +857,8 @@ class G2Page:
             result_link = self.find_exact_result_link(expected_text)
             if result_link is not None:
                 return result_link
-            self.scroll_down()
+            # self.scroll_down()
+            self.human_simulator.scroll_page(direction="down")
             time.sleep(random.uniform(1, 3))
         return self.find_exact_result_link(expected_text)
 
@@ -860,7 +878,7 @@ class G2Page:
             )
             return [b for b in buttons if b.is_displayed() and b.is_enabled()]
 
-        choices = WebDriverWait(self.driver, 30).until(lambda _: show_more_buttons())
+        choices = WebDriverWait(self.driver, 15).until(lambda _: show_more_buttons())
         button = random.choice(choices)
 
         controller = button.find_element(
@@ -906,21 +924,21 @@ class G2Page:
         try:
             self.human_simulator.mouse_click_after_hover(button)
         except ElementClickInterceptedException:
-            self.close_login_modal_if_present(timeout=2)
+            self.close_login_modal_if_present(timeout=0.8)
 
         try:
             WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
                 lambda _: accordion_is_open()
             )
         except TimeoutException:
-            self.close_login_modal_if_present(timeout=2)
+            self.close_login_modal_if_present(timeout=1)
             button.click()
             try:
                 WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
                     lambda _: accordion_is_open()
                 )
             except TimeoutException:
-                self.close_login_modal_if_present(timeout=1)
+                self.close_login_modal_if_present(timeout=1.2)
                 self.driver.execute_script("arguments[0].click();", button)
                 try:
                     WebDriverWait(self.driver, 2, poll_frequency=0.1).until(
@@ -1091,13 +1109,13 @@ class G2Page:
     def run_g2_product(self):
         # if self.product == "BrowserStack":
         #     return self.run_g2_browserstack()
-        return self.run_g2_saucelabs()
+        return self.run_g2_page()
 
     # ------------------------------------------------------------------ #
     # Sauce Labs flow (uses the plain HumanSimulator)
     # ------------------------------------------------------------------ #
 
-    def run_g2_saucelabs(self):
+    def run_g2_page(self):
         try:
             logger.info(f"G2 {self.product} automation started")
 
@@ -1111,20 +1129,31 @@ class G2Page:
             self.human_simulator.input_search_query(
                 query=self.search_query, suggestion=False
             )
-
-            result_link = self.scroll_until_result_is_found(self.target_text)
-            if result_link is None:
-                # breakpoint()
+            # result_link = self.scroll_until_result_is_found(self.target_text)
+            
+            # for i in range(5):
+            try:
+                element_xpath = f"//*[contains(text(), '{self.target_text}')]/parent::a"
+                wait_for_element(
+                    driver = self.driver,
+                    locator= (By.XPATH, element_xpath),
+                    condition="presence",
+                    timeout=10,
+                    poll=0.5,
+                )
+                self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, element_xpath))   
+                logger.info(f"Clicked Google result: {self.target_text}")
+            except Exception:
                 save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
                 logger.error(f"Could not find the exact Google result: {self.target_text}")
                 raise RuntimeError(
                     f"Could not find the exact Google result: {self.target_text}"
                 )
 
-            self.human_simulator.move_mouse_around(moves=2)
-            self.human_simulator.mouse_hover(result_link, hover_time=1.2)
-            result_url = result_link.get_attribute("href")
-            self.human_simulator.mouse_click_after_hover(result_link)
+            # self.human_simulator.move_mouse_around(moves=2)
+            # self.human_simulator.mouse_hover(result_link, hover_time=1.2)
+            # # result_url = result_link.get_attribute("href")
+            # self.human_simulator.mouse_click_after_hover(result_link)
 
             # try:
             #     self._poll(self.switch_to_g2_page, timeout=10, poll=0.3)
@@ -1140,16 +1169,6 @@ class G2Page:
             #     self.driver.get(result_url)
             #     self._poll(self.switch_to_g2_page, timeout=20, poll=0.3)
             logger.info(f"Opened result: {self.driver.current_url}")
-
-            # for i in range(5):
-            #     if check_for_block(self.driver):
-            #         self.driver.refresh()
-            #         time.sleep(randint(3, 5))
-            #     else:
-            #         break
-            # else:
-            #     save_html(self.driver.page_source, "G2_SauceLabs")
-            #     raise Exception("G2 page got Access Denied")
 
             for refresh_attempt in range(5):
                 if not check_for_block(self.driver):
@@ -1168,10 +1187,7 @@ class G2Page:
                     f"G2 {self.product} page got Access Denied"
                 )
             # --------------------------------------------------------------------
-
-
-            save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
-            
+            # save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
 
             self.close_login_modal_if_present()
             self.human_simulator.move_mouse_around(moves=3)
@@ -1296,21 +1312,20 @@ class G2BrowserStack(G2Page):
             f"{time.monotonic() - started_at:.1f}s"
         )
 
-    def find_exact_result_link(self, expected_text):
-        exact = super().find_exact_result_link(expected_text)
-        if exact is not None:
-            return exact
-        for heading in self.driver.find_elements(By.CSS_SELECTOR, "a[href] h3"):
-            title = (heading.text or "").lower()
-            if title.startswith("browserstack reviews") and "details" in title:
-                return heading.find_element(
-                    By.XPATH, G2_BROWSERSTACK_XPATHS["ancestor_link"]
-                )
-        return None
+    # def find_exact_result_link(self, expected_text):
+    #     exact = super().find_exact_result_link(expected_text)
+    #     if exact is not None:
+    #         return exact
+    #     for heading in self.driver.find_elements(By.CSS_SELECTOR, "a[href] h3"):
+    #         title = (heading.text or "").lower()
+    #         if title.startswith("browserstack reviews") and "details" in title:
+    #             return heading.find_element(
+    #                 By.XPATH, G2_BROWSERSTACK_XPATHS["ancestor_link"]
+    #             )
+    #     return None
 
     def scroll_until_result_is_found(self, expected_text):
         for _ in range(self.max_scroll_attempts + 1):
-            self.wait_for_google_verification()
             result = self.find_exact_result_link(expected_text)
             if result is not None:
                 wheel_to_element(self.driver, result)
@@ -1319,25 +1334,25 @@ class G2BrowserStack(G2Page):
             time.sleep(random.uniform(0.8, 1.4))
         return None
 
-    def wait_for_google_verification(self):
-        if not urlsplit(self.driver.current_url).path.startswith("/sorry"):
-            return
-        logger.warning(
-            "Google verification page opened. Complete it manually in Chrome "
-            "within 90 seconds to continue."
-        )
-        try:
-            WebDriverWait(self.driver, 90, poll_frequency=1).until(
-                lambda driver: (
-                    not urlsplit(driver.current_url).path.startswith("/sorry")
-                    and bool(driver.find_elements(By.CSS_SELECTOR, "a[href] h3"))
-                )
-            )
-        except TimeoutException as error:
-            raise RuntimeError(
-                "Google verification was not completed; "
-                "no search results are available"
-            ) from error
+    # def wait_for_google_verification(self):
+    #     if not urlsplit(self.driver.current_url).path.startswith("/sorry"):
+    #         return
+    #     logger.warning(
+    #         "Google verification page opened. Complete it manually in Chrome "
+    #         "within 90 seconds to continue."
+    #     )
+    #     try:
+    #         WebDriverWait(self.driver, 90, poll_frequency=1).until(
+    #             lambda driver: (
+    #                 not urlsplit(driver.current_url).path.startswith("/sorry")
+    #                 and bool(driver.find_elements(By.CSS_SELECTOR, "a[href] h3"))
+    #             )
+    #         )
+    #     except TimeoutException as error:
+    #         raise RuntimeError(
+    #             "Google verification was not completed; "
+    #             "no search results are available"
+    #         ) from error
 
     def wait_for_g2_result(self, timeout=30):
         try:
@@ -1356,12 +1371,10 @@ class G2BrowserStack(G2Page):
 
     def run(self):
         logger.info("G2 BrowserStack automation started")
-        self.driver.get("https://www.google.com")
+        # self.driver.get("https://www.google.com")
         self.human_simulator.input_search_query(
             self.search_query, suggestion=False
         )
-        self.wait_for_google_verification()
-
         result = self.scroll_until_result_is_found(self.target_text)
         if result is None:
             titles = [
@@ -1392,10 +1405,10 @@ class G2BrowserStack(G2Page):
             )
             hover_with_mouse(self.driver, result, 0.6)
             click_with_mouse(self.driver, result)
-            self.wait_for_g2_result(timeout=18)
+            self.wait_for_g2_result(timeout=10)
         logger.info(f"Opened result: {self.driver.current_url}")
 
-        save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
+        # save_html(self.driver.page_source, f"G2_{self.product}_{self.comparing_product} ")
         self.close_login_modal_if_present(timeout=0.4)
         BrowserStackReviewsProductDetails(
             self.driver, self.human_simulator
@@ -1422,7 +1435,7 @@ def run(product="BrowserStack", comparing_product=None):
     options.add_argument("window-size=1920,1080")
     options.add_argument("--disable-blink-features=AutomationControlled")
 
-    driver = uc.Chrome(options=options)
+    driver = uc.Chrome(options=options,version_main=152)
 
     try:
         logger.info("Opening Google")
