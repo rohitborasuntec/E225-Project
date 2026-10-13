@@ -11,6 +11,9 @@ from twocaptcha import TwoCaptcha, ApiException
 from selenium.common.exceptions import (
     TimeoutException, NoSuchElementException, StaleElementReferenceException,
 )
+from dotenv import load_dotenv
+load_dotenv()
+
 class GoogleSearch:
 
     def __init__(self, driver, human_simulator):
@@ -31,7 +34,7 @@ class GoogleSearch:
         if self.driver is None:
             raise RuntimeError("No active browser. Call Browser.launch() first.")
 
-        api_key = api_key or os.environ.get("APIKEY_2CAPTCHA")
+        api_key = api_key or os.environ.get('APIKEY_2CAPTCHA')
         if not api_key:
             raise ValueError(
                 "2Captcha API key missing. Pass api_key= or set "
