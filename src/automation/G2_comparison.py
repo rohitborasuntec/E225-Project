@@ -96,7 +96,7 @@ class G2Comparison:
             self.human_simulator.bring_element_into_view_with_wheel(compare_element)
             self.human_simulator.mouse_click_after_hover(compare_element)
         except Exception as e:
-            logger.warning("Human click failed, trying JS click.",e )
+            logger.warning("Human click failed, trying JS click.")
             self.driver.execute_script("arguments[0].click();", compare_element)
             save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}_after_click.html")
 
