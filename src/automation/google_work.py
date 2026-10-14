@@ -23,12 +23,13 @@ class GoogleSearch:
     # ---------------- captcha solving ---------------- #
 
     def solve_captcha(
-        self,
-        api_key: str | None = None,
-        *,
-        max_retries: int = 3,
-        retry_delay: int = 5,
-    ) -> str | None:
+    self,
+    api_key: str | None = None,
+    *,
+    max_retries: int = 3,
+    retry_delay: int = 3,
+    reload_on_unsolvable: bool = True,
+) -> str | None:
         """Solve the reCAPTCHA on the current page using 2Captcha."""
 
         if self.driver is None:
@@ -42,57 +43,60 @@ class GoogleSearch:
             )
 
         solver = TwoCaptcha(api_key)
-        
-        url = self.driver.current_url
 
-        # ---------- extract sitekey ----------
-        try:
-            sitekey = self.driver.execute_script("""
-                const el = document.querySelector('[data-sitekey]');
-                if (el) return el.getAttribute('data-sitekey');
-                const iframe = document.querySelector('iframe[src*="recaptcha"]');
-                if (iframe) {
-                    const m = iframe.src.match(/[?&]k=([^&]+)/);
-                    if (m) return decodeURIComponent(m[1]);
-                }
-                return null;
-            """)
-        except Exception as exc:
-            logger.error(f"[captcha] sitekey extraction failed: {exc}")
-            sitekey = None
+        # --- helper: extract BOTH sitekey and data-s in one pass ---
+        def _extract_tokens():
+            try:
+                return self.driver.execute_script("""
+                    let sitekey = null, data_s = null;
+
+                    // 1. direct element attrs
+                    const skEl = document.querySelector('[data-sitekey]');
+                    if (skEl) sitekey = skEl.getAttribute('data-sitekey');
+                    const dsEl = document.querySelector('[data-s]');
+                    if (dsEl) data_s = dsEl.getAttribute('data-s');
+
+                    // 2. iframe src
+                    const iframe = document.querySelector('iframe[src*="recaptcha"]');
+                    if (iframe) {
+                        if (!sitekey) {
+                            const mk = iframe.src.match(/[?&]k=([^&]+)/);
+                            if (mk) sitekey = decodeURIComponent(mk[1]);
+                        }
+                        if (!data_s) {
+                            const ms = iframe.src.match(/[?&]s=([^&]+)/);
+                            if (ms) data_s = ms[1];
+                        }
+                    }
+
+                    // 3. script tags
+                    if (!data_s) {
+                        for (const s of document.querySelectorAll('script')) {
+                            const m = s.textContent.match(
+                                /data-s["']?\\s*[:=]\\s*["']([^"']+)["']/
+                            );
+                            if (m) { data_s = m[1]; break; }
+                        }
+                    }
+                    return {sitekey, data_s};
+                """)
+            except Exception as exc:
+                logger.error(f"[captcha] token extraction failed: {exc}")
+                return {"sitekey": None, "data_s": None}
+
+        tokens = _extract_tokens()
+        sitekey, data_s = tokens["sitekey"], tokens["data_s"]
 
         if not sitekey:
             logger.warning("[captcha] No reCAPTCHA sitekey found on this page.")
             return None
         logger.info(f"[captcha] Found sitekey: {sitekey}")
-
-        # ---------- extract data-s (Google Search) ----------
-        try:
-            data_s = self.driver.execute_script("""
-                const el = document.querySelector('[data-s]');
-                if (el) return el.getAttribute('data-s');
-                const iframe = document.querySelector('iframe[src*="recaptcha"]');
-                if (iframe) {
-                    const m = iframe.src.match(/[?&]s=([^&]+)/);
-                    if (m) return m[1];
-                }
-                const scripts = document.querySelectorAll('script');
-                for (const s of scripts) {
-                    const m = s.textContent.match(
-                        /data-s["']?\\s*[:=]\\s*["']([^"']+)["']/
-                    );
-                    if (m) return m[1];
-                }
-                return null;
-            """)
-        except Exception:
-            data_s = None
-
         if data_s:
             logger.info(f"[captcha] Found data-s: {data_s[:20]}...")
 
-        # ---------- solve with retries ----------
+        url = self.driver.current_url
         token = None
+
         for attempt in range(1, max_retries + 1):
             try:
                 logger.info(f"[captcha] Attempt {attempt}/{max_retries}...")
@@ -105,34 +109,52 @@ class GoogleSearch:
                 logger.info("[captcha] Solved successfully.")
                 break
 
-            except ApiException as exc:
+            except Exception as exc:
+                # --- FIX: match on the message text, not on the exception class ---
                 msg = str(exc)
-                if (
+                logger.warning(f"[captcha] Attempt {attempt} failed: {msg[:120]}")
+
+                is_unsolvable = "ERROR_CAPTCHA_UNSOLVABLE" in msg
+                is_transient  = (
                     "cannot recognize response" in msg
-                    or "ERROR_CAPTCHA_UNSOLVABLE" in msg
                     or "ERROR_NO_SLOT_AVAILABLE" in msg
-                ):
-                    logger.warning(
-                        f"[captcha] Transient error, retrying in "
-                        f"{retry_delay}s: {msg[:80]}"
-                    )
-                    time.sleep(retry_delay)
-                    # data-s is single-use: refresh before retry
-                    if data_s:
-                        try:
-                            data_s = self.driver.execute_script("""
-                                const el = document.querySelector('[data-s]');
-                                return el ? el.getAttribute('data-s') : null;
-                            """)
-                        except Exception:
-                            pass
-                else:
-                    logger.error(f"[captcha] Fatal API error: {msg}")
+                    or "ERROR_RECAPTCHA_TIMEOUT" in msg
+                )
+
+                if attempt >= max_retries:
+                    logger.error(f"[captcha] Giving up after {max_retries} attempts.")
                     return None
 
-            except Exception as exc:
-                logger.error(f"[captcha] Unexpected error: {exc}")
-                return None
+                if is_unsolvable and reload_on_unsolvable:
+                    # --- FIX: reload the page so Google issues a FRESH data-s ---
+                    logger.info(
+                        "[captcha] Unsolvable challenge; reloading page for "
+                        "a fresh data-s..."
+                    )
+                    try:
+                        self.driver.refresh()
+                        time.sleep(random.uniform(1, 3))
+                    except Exception as refresh_exc:
+                        logger.warning(f"[captcha] Refresh failed: {refresh_exc}")
+
+                    # re-extract tokens after reload
+                    tokens = _extract_tokens()
+                    sitekey, data_s = tokens["sitekey"], tokens["data_s"]
+                    url = self.driver.current_url
+
+                    if not sitekey:
+                        logger.error("[captcha] sitekey gone after reload; aborting.")
+                        return None
+                    logger.info(f"[captcha] New data-s: "
+                                f"{(data_s or 'None')[:20]}...")
+
+                elif is_transient:
+                    logger.info(f"[captcha] Transient error; sleeping {retry_delay}s.")
+                    time.sleep(retry_delay)
+
+                else:
+                    logger.error(f"[captcha] Fatal error: {msg}")
+                    return None
 
         if not token:
             logger.error("[captcha] Failed to obtain token after retries.")
@@ -164,20 +186,7 @@ class GoogleSearch:
             logger.error(f"[captcha] Token injection failed: {exc}")
             return None
 
-        # # ---------- submit ----------
-        # if submit:
-        #     try:
-        #         btn = self.driver.find_element(
-        #             By.CSS_SELECTOR,
-        #             "button[type='submit'], input[type='submit'], #recaptcha-verify-button",
-        #         )
-        #         btn.click()
-        #         logger.info("[captcha] Submitted form.")
-        #     except Exception:
-        #         logger.info("[captcha] No submit button; relying on callback.")
-
         return token
-
     # ---------------- bot detection ---------------- #
 
     def check_for_bot(self) -> bool:
@@ -199,7 +208,7 @@ class GoogleSearch:
         )
 
         try:
-            found = bool(self.driver.find_elements(By.XPATH, captcha_xpath))
+            found = bool(wait_for_element(self.driver, locator = (By.XPATH, captcha_xpath),timeout=3, condition="visible", poll=0.5))
         except Exception as exc:
             logger.error(f"[check_for_bot] DOM query failed: {exc}")
             return False
@@ -248,6 +257,7 @@ class GoogleSearch:
                     self.driver,
                     (By.XPATH, '//*[@aria-label="Google"]'),
                     condition="visible",
+                    timeout=3
                 )
 
                 self.check_for_pop_up(keyword)
@@ -264,6 +274,7 @@ class GoogleSearch:
                     self.driver,
                     (By.XPATH, '//a[@aria-label="Go to Google Home"]'),
                     condition="visible",
+                    timeout=3
                 )
 
                 self.check_for_pop_up(keyword)
@@ -271,6 +282,7 @@ class GoogleSearch:
                 self.change_in_eng()
                 
                 clicked = False
+
                 for attempt in range(7):
                     try:
                         elem_xpath = self.get_elem_xpaths()

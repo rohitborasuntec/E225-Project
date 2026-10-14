@@ -11,7 +11,7 @@ from src.logging import logger
 from src.automation.google_work import GoogleSearch
 from src.automation.G2_comparison import G2Comparison
 from src.automation.G2_page import G2Page
-from src.automation.errors import AccessDeniedError,RetryableFailure
+from src.automation.errors import AccessDeniedError, RetryableFailure
 from src.excel import Excel
 
 
@@ -26,6 +26,7 @@ MAX_RETRY_ATTEMPTS   = 3    # total attempts per pair when blocked
 MAX_VPN_ATTEMPTS     = 20   # VPN locations to try per attempt
 VPN_SETTLE_WAIT      = 5    # after connect, before opening browser
 POST_DISCONNECT_WAIT = 3    # after disconnect, before next connect/browser
+
 
 # --------------------------------------------------------------------------
 # G2 automation
@@ -59,10 +60,11 @@ class G2Automation:
                 "ai in test cases", "app android", "android on browser",
             ]
             keywords_combos = [
-                (random.choices(categories, k=2), True),
+                (random.choices(categories, k=2), False),
                 (random.choices(test_keywords, k=2), False),
             ]
 
+            # ---- Google Search ----
             try:
                 self.gs.search_work(keywords_combos)
             except AccessDeniedError:
@@ -71,7 +73,9 @@ class G2Automation:
             except Exception as e:
                 status = f"Failed at Google Search: {str(e).splitlines()[0]}"
                 logger.exception(status)
-                raise RetryableFailure(status)
+                raise RetryableFailure(status) from e
+
+            # ---- G2 Product Page ----
             try:
                 G2Page(self.driver, self.human_simulator, product, comparing_product).run_g2_product()
                 link = self.driver.current_url
@@ -83,31 +87,40 @@ class G2Automation:
                 logger.exception(status)
                 raise RetryableFailure(status) from e
 
+            # ---- G2 Comparison Page ----
             try:
                 G2Comparison(self.driver, self.human_simulator, comparing_product).run_g2_comparisons()
                 status = "Done"
             except AccessDeniedError:
                 status = "Blocked at G2 Comparison"
                 raise RetryableFailure(status)
+            except RetryableFailure:
+                # Soft failure inside comparison (e.g. footer click) — retry
+                status = "Retryable at G2 Comparison"
+                raise
             except Exception as e:
-                status = "Failed at G2 Comparison"   # not retried (original behaviour)
+                status = f"Failed at G2 Comparison: {str(e).splitlines()[0]}"
                 logger.exception(f"G2 comparison failed: {e}")
-                
-        except (AccessDeniedError, RetryableFailure):
+                raise RetryableFailure(status) from e
+
+        # === FIX: bind `e` so `raise ... from e` doesn't NameError ===
+        except (AccessDeniedError, RetryableFailure) as e:
             retry = True
             raise RetryableFailure(status) from e
-        
+
         except Exception:
             if status == "Unknown":
                 status = "Failed (unknown)"
             logger.error(traceback.format_exc())
-            
+
         finally:
             if not retry or is_last_attempt:
                 self.set_data(product, comparing_product, browser, location, status, link)
                 self.excel.save_excel(row=self.items)
 
         return status
+
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -136,7 +149,7 @@ def connect_vpn(vpn, location_manager):
             logger.warning(f"[VPN] '{candidate}' rejected ({e}); blacklisting.")
             location_manager.mark_failed(candidate)
             safe_disconnect(vpn)
-            time.sleep(POST_DISCONNECT_WAIT)
+            # time.sleep(POST_DISCONNECT_WAIT)
     return None
 
 
@@ -191,11 +204,13 @@ def run_pair(product, comparing_product, vpn, location_manager):
                 location_manager.mark_success(location)
                 return True
             else:
-                logger.info(f"Rettryingg... Beacuse of Failure {product}/{comparing_product}")
-                
-            # logger.warning(f"{product}/{comparing_product} finished with status '{status}' - not retrying.")
-            
-            
+                logger.info(
+                    f"Retrying {product}/{comparing_product} - "
+                    f"previous attempt ended with status '{status}' "
+                    f"(attempt {attempt}/{MAX_RETRY_ATTEMPTS})."
+                )
+                # fall through to finally -> loop continues
+
         except (AccessDeniedError, RetryableFailure) as err:
             kind = "BLOCKED" if isinstance(err, AccessDeniedError) else "FAILED"
             logger.warning(
@@ -210,7 +225,6 @@ def run_pair(product, comparing_product, vpn, location_manager):
 
         except Exception:
             logger.exception(f"{product}/{comparing_product} crashed (not retryable).")
-            
 
         finally:
             if manager is not None:

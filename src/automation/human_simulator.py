@@ -1863,6 +1863,7 @@ class HumanSimulator:
         pool=None,
         chunk_threshold_viewports=CHUNK_THRESHOLD_VIEWPORTS,
         max_chunks=MAX_CHUNKS,
+        do_scroll_duration = 0.55
     ):
         """
         Full random browsing flow driven by a pool dict.
@@ -1959,7 +1960,7 @@ class HumanSimulator:
             # ---------------- SCROLL PHASE ----------------
             do_scroll = (
                 scroll_budget_left() > 0
-                and random.random() < 0.55
+                and random.random() < do_scroll_duration 
             )
 
             if do_scroll:

@@ -11,7 +11,7 @@ from selenium.webdriver.common.by import By
 from src.commons import *
 from src.automation.human_simulator import HumanSimulator
 from src.automation.xpath_pools import G2_COMPARISON_POOL
-from src.automation.errors import AccessDeniedError          # <-- NEW
+from src.automation.errors import AccessDeniedError, RetryableFailure   # <-- CHANGED
 from src.logging import logger
 
 
@@ -60,35 +60,38 @@ class G2Comparison:
             f"/../../..//*[contains(text(),'Compare Now')]//ancestor::a"
         )
         logger.info("Searching for comparison block...")
-        # start_time = time.time()
-        # while time.time() - start_time < 30:
-        #     try:
-        #         compare_element = self.driver.find_element(By.XPATH, compare_xpath)
-        #         if compare_element.is_displayed():
-        #             logger.info("Comparison block found.")
-        #             break
-        #     except Exception:
-        #         pass
-        #     self.human_simulator.scroll_page()
-        #     time.sleep(random.uniform(0.5, 1))
-        # else:
-        #     logger.error("Comparison block was not found.")
 
         compare_element = wait_for_element(
             self.driver, (By.XPATH, compare_xpath),
             condition="clickable", timeout=10, poll=0.5,
         )
+
+        # === FIX: guard against None from wait_for_element ===
+        if compare_element is None:
+            save_html(
+                self.driver.page_source,
+                f"G2_Comparison_Page_{self.comparing_product}_compare_not_found.html",
+            )
+            logger.error(
+                f"Comparison block not found for '{self.comparing_product}' "
+                f"on page: {self.driver.current_url}"
+            )
+            raise RetryableFailure(
+                f"Compare Now block not found for {self.comparing_product}"
+            )
+
         logger.info("Clicking comparison button (human)...")
 
-        if self.driver.find_elements(By.XPATH, "//button[contains(.,'Reject Non-Essential')]"):
-            reject_button = self.driver.find_element(By.XPATH, "//button[contains(.,'Reject Non-Essential')]")
+        reject_button = self.driver.find_elements(By.XPATH, "//button[contains(.,'Reject Non-Essential')]")
+        if reject_button:
+            reject_button = reject_button[0]
             try:
                 self.human_simulator.mouse_click(reject_button)
                 logger.info("Clicked 'Reject Non-Essential' button.")
             except Exception:
                 reject_button.click()
                 logger.info("Clicked 'Reject Non-Essential' button (fallback).")
-            time.sleep(random.uniform(0.8, 2.6))
+            # time.sleep(random.uniform(0.8, 2.6))
 
         try:
             # self.human_simulator.scroll_to_element_human(compare_element,align="end")
@@ -100,32 +103,31 @@ class G2Comparison:
             self.driver.execute_script("arguments[0].click();", compare_element)
 
         logger.info("Comparison button clicked.")
-        time.sleep(random.uniform(0.5, 3))
+        time.sleep(random.uniform(0.5, 1.2))
 
     # ==================================================================
     # BROWSE — delegates to HumanSimulator with the pool
     # ==================================================================
-    def browse_comparison_page(self, min_seconds=21, max_seconds=33):
+    def browse_comparison_page(self, min_seconds=24, max_seconds=33):
         duration = random.uniform(min_seconds, max_seconds)
         self.human_simulator.browse_page_randomly(
-            duration=duration,
-            pool=G2_COMPARISON_POOL,
-        )
+                duration=duration,
+                pool=G2_COMPARISON_POOL,
+                do_scroll_duration=0.65
+            )
 
     # ==================================================================
     # COMPLETE FLOW
     # ==================================================================
     def process_sauce_labs_comparison(self):
-        logger.info("=" * 60)
         logger.info("Starting Sauce Labs comparison flow")
-        logger.info("=" * 60)
 
         self.open_g2_compare_page()
         logger.info("Comparison page opened.")
 
         # --- CHANGED: raise AccessDeniedError so the outer loop can retry
         #              the whole product/comparing_product pair on a new VPN.
-        for refresh_attempt in range(5):
+        for refresh_attempt in range(3):
             if not check_for_block(self.driver):
                 break
             logger.warning(
@@ -133,7 +135,7 @@ class G2Comparison:
                 f"(refresh {refresh_attempt + 1}/5)"
             )
             self.driver.refresh()
-            time.sleep(random.uniform(3, 5))
+            time.sleep(random.uniform(0.5, 1.5))
         else:
             logger.error("G2 Comparison page is still Access Denied "
                          "after 5 refreshes")
@@ -146,20 +148,21 @@ class G2Comparison:
 
         logger.info("Searching for footer link...")
         footer_xpath = '//div[@id="footer-inner"]/div[2]/ul/li[1]/a'
+
         try:
             footer_link = wait_for_element(
                 self.driver, (By.XPATH, footer_xpath),
-                condition="presence", timeout=15, poll=0.5,
+                condition="presence", timeout=0.5, poll=0.5,
             )
             logger.info("Footer link found.")
 
-            try:
-                self.human_simulator.bring_element_into_view_with_wheel(footer_link)
-            except Exception:
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block:'center'});", footer_link
-                )
-            time.sleep(random.uniform(1, 2))
+            # try:
+            #     self.human_simulator.bring_element_into_view_with_wheel(footer_link)
+            # except Exception:
+            #     self.driver.execute_script(
+            #         "arguments[0].scrollIntoView({block:'center'});", footer_link
+            #     )
+            # time.sleep(random.uniform(0, 2))
 
             logger.info("Clicking footer link (human)...")
             try:
@@ -167,34 +170,39 @@ class G2Comparison:
             except Exception:
                 footer_link.click()
             logger.info("Footer link clicked successfully.")
+
         except Exception as error:
             logger.error(f"Footer link click failed: {error}")
-            save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}_footer_click_failed.html")         
-            return
+            save_html(
+                self.driver.page_source,
+                f"G2_Comparison_Page_{self.comparing_product}_footer_click_failed.html",
+            )
+            # === FIX: raise so the caller retries on a fresh VPN/browser ===
+            raise RetryableFailure(f"Footer link click failed: {error}")
 
-        time.sleep(random.uniform(3, 5))
+        # time.sleep(random.uniform(3, 5))
         logger.info("New page opened.")
 
-        self.browse_comparison_page(min_seconds=3, max_seconds=5)
+        self.browse_comparison_page(min_seconds=5, max_seconds=10)
+
         logger.info("Second page browsing completed.")
         logger.info("Complete Sauce Labs flow finished.")
-
 
     def run_g2_comparisons(self):
         """
         Run the comparison flow.
 
-        Important: AccessDeniedError is RE-RAISED so the top-level runner
-        can restart the whole pair on a fresh VPN. All other exceptions are
-        logged and swallowed (comparison failure is not fatal for the row).
+        Important: AccessDeniedError and RetryableFailure are RE-RAISED so
+        the top-level runner can restart the whole pair on a fresh VPN.
+        All other exceptions are logged and re-raised as RetryableFailure.
         """
         try:
             self.process_sauce_labs_comparison()
-        except AccessDeniedError:
+        except (AccessDeniedError, RetryableFailure):
             raise                                   # <-- let caller retry
         except Exception as error:
             logger.error(f"ERROR OCCURRED: {error}")
-            raise  # <-- let caller retry, but log the error first
+            raise RetryableFailure(str(error)) from error
 
 
 if __name__ == "__main__":

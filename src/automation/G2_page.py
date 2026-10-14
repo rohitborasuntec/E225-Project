@@ -1154,25 +1154,18 @@ class G2Page:
         try:
             logger.info(f"G2 {self.product} automation started")
 
-            # wait_for_element(
-            #     self.driver,
-            #     (By.CSS_SELECTOR, "a[href] h3"),
-            #     condition="presence",
-            #     poll=0.5,
-            # )
-
             self.human_simulator.input_search_query(
                 query=self.search_query, suggestion=False
             )
 
             try:
                 element_xpath = f"//*[contains(text(), '{self.target_text}')]/parent::a"
-                wait_for_element(
-                    driver=self.driver,
-                    locator=(By.XPATH, element_xpath),
-                    condition="presence",
-                    poll=0.5,
-                )
+                # wait_for_element(
+                #     driver=self.driver,
+                #     locator=(By.XPATH, element_xpath),
+                #     condition="presence",
+                #     poll=0.5,
+                # )
                 self.human_simulator.mouse_click_after_hover(
                     self.driver.find_element(By.XPATH, element_xpath)
                 )
@@ -1196,7 +1189,7 @@ class G2Page:
                     f"(refresh {refresh_attempt + 1}/5)"
                 )
                 self.driver.refresh()
-                time.sleep(random.uniform(0.1,0.9))
+                time.sleep(random.uniform(0.1,1))
             else:
                 save_html(
                     self.driver.page_source,
