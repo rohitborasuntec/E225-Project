@@ -55,7 +55,7 @@ def check_for_block(driver):
 #         return True
 #     return False
 
-def wait_for_element(driver, locator, timeout=10, condition="visible", poll=0.5, raise_on_timeout=False):
+def wait_for_element(driver, locator, timeout=5, condition="visible", poll=0.5, raise_on_timeout=False):
     conditions = {
         "presence":  EC.presence_of_element_located,
         "visible":   EC.visibility_of_element_located,

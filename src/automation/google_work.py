@@ -219,6 +219,21 @@ class GoogleSearch:
         logger.info("[check_for_bot] CAPTCHA solved and submitted.")
         return True
 
+    def check_for_pop_up(self,keyword):
+        pop_up = self.driver.find_elements(By.XPATH, '//button[@aria-haspopup="true"]')
+
+        if pop_up:
+            self.human_simulator.mouse_click_after_hover(pop_up[0])
+            logger.info(f"Pop up closed for {keyword}")
+            time.sleep(random.uniform(0.2, 1))
+            
+            self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH,"//li[contains(text(),'English (United Kingdom)')]" ))
+            refuse_xpath = "//button[contains(.,'Reject all')]"
+            
+            if self.driver.find_elements(By.XPATH,refuse_xpath):
+                self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
+                logger.info(f"Reject All done")
+        
 
     def search_work(self, keyword_combos):
         
@@ -235,19 +250,7 @@ class GoogleSearch:
                     condition="visible",
                 )
 
-                pop_up = self.driver.find_elements(By.XPATH, '//button[@aria-haspopup="true"]')
-
-                if pop_up:
-                    self.human_simulator.mouse_click_after_hover(pop_up[0])
-                    logger.info(f"Pop up closed for {keyword}")
-                    time.sleep(random.uniform(0.5, 1))
-                    
-                    self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH,"//li[contains(text(),'English (United Kingdom)')]" ))
-                    refuse_xpath = "//button[contains(.,'Reject all')]"
-                    
-                    if self.driver.find_elements(By.XPATH,refuse_xpath):
-                        self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
-                        logger.info(f"Reject All done")
+                self.check_for_pop_up(keyword)
                 
                 try:
                     self.human_simulator.input_search_query(query,suggestion=sug)
@@ -263,31 +266,10 @@ class GoogleSearch:
                     condition="visible",
                 )
 
-                xpath_trans = self.change_in_eng()
-
-                if xpath_trans:
-                    try:
-                        self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, xpath_trans))
-                    except (StaleElementReferenceException, NoSuchElementException):
-                        # Page changed under us. Retry once, or just carry on without it.
-                        xpath_trans = self.change_in_eng(timeout=1)
-                        if xpath_trans:
-                            self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, xpath_trans))
-
-                # if xpath_trans:
-                #     self.human_simulator.mouse_click_after_hover(
-                #         self.driver.find_element(By.XPATH, xpath_trans)
-                #     )
-                #     logger.info(f"Translation done for {keyword}")
-
-                refuse_xpath = "//button[contains(.,'Reject all')]"
+                self.check_for_pop_up(keyword)
                 
-                if self.driver.find_elements(By.XPATH,refuse_xpath):
-                    self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, refuse_xpath))
-                    logger.info(f"Reject All done")
+                self.change_in_eng()
                 
-                # save_html(html_text=self.driver.page_source, file_name=query)
-
                 clicked = False
                 for attempt in range(7):
                     try:
@@ -333,9 +315,10 @@ class GoogleSearch:
     def change_in_eng(self):
         trans_xpath = "//a[contains(text(),'Change to English')]"
         try:
-            wait_for_element(self.driver, (By.XPATH, trans_xpath), timeout=3, condition="clickable")
+            # wait_for_element(self.driver, (By.XPATH, trans_xpath), timeout=3, condition="clickable")
 
             if self.driver.find_elements(By.XPATH, trans_xpath):
+                self.human_simulator.mouse_click_after_hover(self.driver.find_element(By.XPATH, trans_xpath))
                 return trans_xpath
         except Exception as e:
             logger.info("No translation link found.")

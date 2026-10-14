@@ -812,7 +812,7 @@ class G2Page:
         wait_for_element(
             self.driver,
             (By.ID, "login-modal"),
-            timeout=2,
+            timeout=timeout,
             condition="invisible",
             poll=0.1)
         logger.info("Closed G2 login modal")
@@ -1154,12 +1154,12 @@ class G2Page:
         try:
             logger.info(f"G2 {self.product} automation started")
 
-            wait_for_element(
-                self.driver,
-                (By.CSS_SELECTOR, "a[href] h3"),
-                condition="presence",
-                poll=0.5,
-            )
+            # wait_for_element(
+            #     self.driver,
+            #     (By.CSS_SELECTOR, "a[href] h3"),
+            #     condition="presence",
+            #     poll=0.5,
+            # )
 
             self.human_simulator.input_search_query(
                 query=self.search_query, suggestion=False
@@ -1171,7 +1171,6 @@ class G2Page:
                     driver=self.driver,
                     locator=(By.XPATH, element_xpath),
                     condition="presence",
-                    timeout=10,
                     poll=0.5,
                 )
                 self.human_simulator.mouse_click_after_hover(
@@ -1189,7 +1188,7 @@ class G2Page:
                 )
             logger.info(f"Opened result: {self.driver.current_url}")
 
-            for refresh_attempt in range(5):
+            for refresh_attempt in range(3):
                 if not check_for_block(self.driver):
                     break
                 logger.warning(
@@ -1197,7 +1196,7 @@ class G2Page:
                     f"(refresh {refresh_attempt + 1}/5)"
                 )
                 self.driver.refresh()
-                time.sleep(randint(3, 5))
+                time.sleep(random.uniform(0.1,0.9))
             else:
                 save_html(
                     self.driver.page_source,

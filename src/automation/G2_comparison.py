@@ -90,15 +90,14 @@ class G2Comparison:
                 logger.info("Clicked 'Reject Non-Essential' button (fallback).")
             time.sleep(random.uniform(0.8, 2.6))
 
-        
         try:
             # self.human_simulator.scroll_to_element_human(compare_element,align="end")
             self.human_simulator.bring_element_into_view_with_wheel(compare_element)
             self.human_simulator.mouse_click_after_hover(compare_element)
         except Exception as e:
-            logger.warning("Human click failed, trying JS click.")
-            self.driver.execute_script("arguments[0].click();", compare_element)
             save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}_after_click.html")
+            logger.warning(f"Human click failed, trying JS click.{e}")
+            self.driver.execute_script("arguments[0].click();", compare_element)
 
         logger.info("Comparison button clicked.")
         time.sleep(random.uniform(0.5, 3))

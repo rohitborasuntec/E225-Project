@@ -67,18 +67,17 @@ class G2Automation:
                 self.gs.search_work(keywords_combos)
             except AccessDeniedError:
                 status = "Blocked at Google Search"
-                raise
+                raise RetryableFailure(status)
             except Exception as e:
                 status = f"Failed at Google Search: {str(e).splitlines()[0]}"
                 logger.exception(status)
-                raise RetryableFailure(status) from e
-
+                raise RetryableFailure(status)
             try:
                 G2Page(self.driver, self.human_simulator, product, comparing_product).run_g2_product()
                 link = self.driver.current_url
             except AccessDeniedError:
                 status = "Blocked at G2 Page"
-                raise
+                raise RetryableFailure(status)
             except Exception as e:
                 status = f"Failed at G2 Page: {str(e).splitlines()[0]}"
                 logger.exception(status)
@@ -89,18 +88,20 @@ class G2Automation:
                 status = "Done"
             except AccessDeniedError:
                 status = "Blocked at G2 Comparison"
-                raise
+                raise RetryableFailure(status)
             except Exception as e:
                 status = "Failed at G2 Comparison"   # not retried (original behaviour)
                 logger.exception(f"G2 comparison failed: {e}")
-
+                
         except (AccessDeniedError, RetryableFailure):
             retry = True
-            raise
+            raise RetryableFailure(status) from e
+        
         except Exception:
             if status == "Unknown":
                 status = "Failed (unknown)"
             logger.error(traceback.format_exc())
+            
         finally:
             if not retry or is_last_attempt:
                 self.set_data(product, comparing_product, browser, location, status, link)
@@ -168,13 +169,11 @@ def run_pair(product, comparing_product, vpn, location_manager):
         manager, browser = None, None
 
         try:
-            time.sleep(VPN_SETTLE_WAIT)
-
+            # time.sleep(VPN_SETTLE_WAIT)
             excluded = browsers_to_exclude(Excel().browser_list(), tried_browsers)
             logger.info(
                 f"[Attempt {attempt}/{MAX_RETRY_ATTEMPTS}] excluding browsers: {excluded}"
             )
-
             manager = Browser(headless=False, done_browser=excluded)
             driver, browser = manager.launch()
 
@@ -186,13 +185,17 @@ def run_pair(product, comparing_product, vpn, location_manager):
                 product, comparing_product, browser, location,
                 is_last_attempt=(attempt == MAX_RETRY_ATTEMPTS),
             )
+
             if status == "Done":
                 logger.info(f"Completed {product}/{comparing_product} via '{location}' on {browser}")
                 location_manager.mark_success(location)
                 return True
-            logger.warning(f"{product}/{comparing_product} finished with status '{status}' - not retrying.")
-            return False
-
+            else:
+                logger.info(f"Rettryingg... Beacuse of Failure {product}/{comparing_product}")
+                
+            # logger.warning(f"{product}/{comparing_product} finished with status '{status}' - not retrying.")
+            
+            
         except (AccessDeniedError, RetryableFailure) as err:
             kind = "BLOCKED" if isinstance(err, AccessDeniedError) else "FAILED"
             logger.warning(
@@ -207,33 +210,7 @@ def run_pair(product, comparing_product, vpn, location_manager):
 
         except Exception:
             logger.exception(f"{product}/{comparing_product} crashed (not retryable).")
-            # return False
-
-        #     G2Automation(driver, human_simulator, gs).run_g2(
-        #         product, comparing_product, browser, location
-        #     )
-        #     logger.info(
-        #         f"Completed {product}/{comparing_product} via '{location}' on {browser}"
-        #     )
-        #     location_manager.mark_success(location)
-        #     return True
-
-        # except AccessDeniedError as blocked:
-        #     logger.warning(
-        #         f"[BLOCKED {attempt}/{MAX_RETRY_ATTEMPTS}] {product}/{comparing_product} "
-        #         f"on '{location}' with {browser}: {blocked}"
-        #     )
-        #     location_manager.mark_failed(location)
-        #     if browser:
-        #         tried_browsers.append(browser)
-            # loop continues: new VPN + a different browser
-
-        # except Exception:
-        #     # Code/data error: a new VPN or browser won't fix it, so don't retry.
-        #     logger.exception(
-        #         f"{product}/{comparing_product} failed (not a block) - not retrying."
-        #     )
-        #     return False
+            
 
         finally:
             if manager is not None:

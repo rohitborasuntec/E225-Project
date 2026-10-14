@@ -193,7 +193,7 @@ class Browser:
 
     _WINDOW_SIZES = [
         # (1366, 768),
-        (1440, 900),
+        # (1440, 900),
         # (1536, 864),
         # (1600, 900),
         (1920, 1080),
@@ -775,8 +775,8 @@ class Browser:
     def quit(self, browser_name: str | None = None):
         
         name = (browser_name or self.browser_name or "").lower()
-
-        if self.driver:
+        
+        if self.driver is not None:
             try:
                 self.driver.quit()
                 logger.info("WebDriver quit successfully.")
@@ -800,18 +800,19 @@ class Browser:
 
 if __name__ == "__main__":
     manager = Browser(headless=False)
-    driver, launched = manager.launch("Firefox")
+    driver, launched = manager.launch("Brave")
     try:
-        driver.get("https://www.google.com")
-        time.sleep(random.uniform(1.5, 3.0))
-        manager.human_mouse_wander(driver, moves=3)
-        selector = "textarea[name=q], input[name=q]"
-        try:
-            manager.human_type(driver, selector, "python tutorial")
-            driver.find_element(By.CSS_SELECTOR, selector).send_keys(Keys.ENTER)
-        except Exception as exc:
-            logger.error(f"[demo] Search interaction failed: {exc}")
-        time.sleep(random.uniform(2.0, 4.0))
+        # driver.get("https://www.google.com")
+        # time.sleep(random.uniform(1.5, 3.0))
+        # manager.human_mouse_wander(driver, moves=3)
+        # selector = "textarea[name=q], input[name=q]"
+        # try:
+        #     manager.human_type(driver, selector, "python tutorial")
+        #     driver.find_element(By.CSS_SELECTOR, selector).send_keys(Keys.ENTER)
+        # except Exception as exc:
+        #     logger.error(f"[demo] Search interaction failed: {exc}")
+        # time.sleep(random.uniform(2.0, 4.0))
         logger.info(f"Browser: {launched}\nTitle: {driver.title}")
+        
     finally:
         manager.quit(launched)

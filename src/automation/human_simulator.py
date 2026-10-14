@@ -617,7 +617,7 @@ class HumanSimulator:
         char_delay=None,
         think_pause=None,
         pre_submit_pause=None,
-        suggestion=True,
+        suggestion=False,
     ):
         input_query = query
 
@@ -715,7 +715,6 @@ class HumanSimulator:
                 "arguments[0].scrollIntoView({block:'center', inline:'center'});",
                 search_box,
             )
-            time.sleep(0.2)
         except Exception:
             pass
 
@@ -741,18 +740,16 @@ class HumanSimulator:
             if query_used:
                 return query_used
 
+        # ---- CHANGED: no clear + retype; just submit what we typed ----
         final_pause = (
             pre_submit_pause
             if pre_submit_pause is not None
             else self._gauss(0.6, 0.2, 0.2, 1.5)
         )
         time.sleep(final_pause)
-        search_box.clear()
-        self._human_type_text(search_box, input_query)
         self.mouse_click(search_box)
         search_box.submit()
         return input_query
-
     # ==================================================================
     # mouse_click with pre-click scanning + rare miss-click
     # ==================================================================
