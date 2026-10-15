@@ -1160,12 +1160,13 @@ class G2Page:
 
             try:
                 element_xpath = f"//*[contains(text(), '{self.target_text}')]/parent::a"
-                # wait_for_element(
-                #     driver=self.driver,
-                #     locator=(By.XPATH, element_xpath),
-                #     condition="presence",
-                #     poll=0.5,
-                # )
+                wait_for_element(
+                    driver=self.driver,
+                    locator=(By.XPATH, element_xpath),
+                    condition="presence",
+                    timeout=1,
+                    poll=0.5,
+                )
                 self.human_simulator.mouse_click_after_hover(
                     self.driver.find_element(By.XPATH, element_xpath)
                 )
