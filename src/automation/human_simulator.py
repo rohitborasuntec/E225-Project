@@ -578,39 +578,48 @@ class HumanSimulator:
     # ==================================================================
     # HUMAN TYPING (bursts, typos, corrections, look-aways)
     # ==================================================================
+
     def _human_type_text(self, element, text):
-        """Type with realistic burst patterns, corrections, and pauses."""
+        """Type faster with short bursts, occasional corrections, and pauses."""
         i = 0
         while i < len(text):
-            burst = random.randint(2, 5)
+            # Type 6–10 characters per burst
+            burst = random.randint(6, 10)
+
             for _ in range(burst):
                 if i >= len(text):
                     break
+
                 char = text[i]
 
-                if random.random() < 0.03 and char.isalpha():
+                # Occasional typing correction
+                if random.random() < 0.02 and char.isalpha():
                     wrong = random.choice("abcdefghijklmnopqrstuvwxyz")
                     element.send_keys(wrong)
-                    time.sleep(self._gauss(0.08, 0.03, 0.03, 0.18))
+                    time.sleep(self._gauss(0.05, 0.02, 0.02, 0.10))
                     element.send_keys(Keys.BACKSPACE)
-                    time.sleep(self._gauss(0.1, 0.03, 0.04, 0.2))
+                    time.sleep(self._gauss(0.06, 0.02, 0.02, 0.12))
 
                 element.send_keys(char)
                 i += 1
 
-                base = self._gauss(0.09, 0.03, 0.04, 0.22) * self._fatigue_factor
+                # Faster per-character delay
+                base = self._gauss(0.06, 0.02, 0.02, 0.14) * self._fatigue_factor
+
                 if char in " ,.?!;:":
-                    base += random.uniform(0.08, 0.18)
+                    base += random.uniform(0.04, 0.10)
+
                 time.sleep(base)
 
-            if random.random() < 0.35:
-                time.sleep(self._gauss(0.55, 0.25, 0.15, 1.4))
+            # Shorter pauses between bursts
+            if random.random() < 0.25:
+                time.sleep(self._gauss(0.30, 0.12, 0.08, 0.70))
             else:
-                time.sleep(self._gauss(0.18, 0.06, 0.05, 0.4))
+                time.sleep(self._gauss(0.10, 0.04, 0.03, 0.22))
 
-            if random.random() < 0.05:
+            # Occasional random mouse movement
+            if random.random() < 0.03:
                 self._random_drift()
-
     def input_search_query(
         self,
         query,
@@ -618,6 +627,7 @@ class HumanSimulator:
         think_pause=None,
         pre_submit_pause=None,
         suggestion=False,
+        need_full= False
     ):
         input_query = query
 
@@ -732,6 +742,12 @@ class HumanSimulator:
 
         search_box.clear()
         logger.info(f"Query Used {input_query}")
+        
+        if not need_full:
+
+            n = len(input_query)
+
+            input_query = input_query[:random.randint(n//2,n)]
 
         self._human_type_text(search_box, input_query)
 
@@ -746,7 +762,7 @@ class HumanSimulator:
             if pre_submit_pause is not None
             else self._gauss(0.6, 0.2, 0.2, 1.5)
         )
-        time.sleep(final_pause)
+        # time.sleep(final_pause)
         self.mouse_click(search_box)
         search_box.submit()
         return input_query

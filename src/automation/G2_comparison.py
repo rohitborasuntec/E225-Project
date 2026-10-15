@@ -45,7 +45,7 @@ class G2Comparison:
                                 self.human_simulator.mouse_click(button)
                             except Exception:
                                 button.click()
-                            time.sleep(random.uniform(1, 3))
+                            time.sleep(random.uniform(0.5, 2))
                             logger.info("Cookie Consent handled.")
                             break
                     except Exception:
@@ -63,11 +63,12 @@ class G2Comparison:
 
         compare_element = wait_for_element(
             self.driver, (By.XPATH, compare_xpath),
-            condition="clickable", timeout=10, poll=0.5,
+            condition="clickable", timeout=5, poll=0.5,
         )
 
         # === FIX: guard against None from wait_for_element ===
         if compare_element is None:
+            take_screenshot(self.driver,f"G2_Comparison_Page_{self.comparing_product}_compare_not_found.png")
             save_html(
                 self.driver.page_source,
                 f"G2_Comparison_Page_{self.comparing_product}_compare_not_found.html",
@@ -99,6 +100,7 @@ class G2Comparison:
             self.human_simulator.mouse_click_after_hover(compare_element)
         except Exception as e:
             save_html(self.driver.page_source, f"G2_Comparison_Page_{self.comparing_product}_after_click.html")
+            take_screenshot(self.driver, f"G2_Comparison_Page_{self.comparing_product}_after_click.png")
             logger.warning(f"Human click failed, trying JS click.{e}")
             self.driver.execute_script("arguments[0].click();", compare_element)
 
@@ -173,11 +175,13 @@ class G2Comparison:
 
         except Exception as error:
             logger.error(f"Footer link click failed: {error}")
+            
             save_html(
                 self.driver.page_source,
                 f"G2_Comparison_Page_{self.comparing_product}_footer_click_failed.html",
             )
-            # === FIX: raise so the caller retries on a fresh VPN/browser ===
+            take_screenshot(self.driver, f"G2_Comparison_Page_{self.comparing_product}_footer_click_failed.png")
+            
             raise RetryableFailure(f"Footer link click failed: {error}")
 
         # time.sleep(random.uniform(3, 5))

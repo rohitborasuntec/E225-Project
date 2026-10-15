@@ -20,7 +20,6 @@ of native-mouse geometry.
 """
 
 from __future__ import annotations
-from src.commons import wait_for_element, save_html, check_for_block
 from src.automation.human_simulator import HumanSimulator
 from src.automation.xpath_pools import (
     G2_BROWSERSTACK_XPATHS,
@@ -37,7 +36,7 @@ import time
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
-from random import randint  # FIX: randint is used by run_g2_saucelabs
+from random import randint  
 
 # if __package__ in (None, ""):
 #     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -52,14 +51,7 @@ from selenium.common.exceptions import (
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-from src.commons import wait_for_element, save_html, check_for_block
-from src.automation.human_simulator import HumanSimulator
-from src.automation.xpath_pools import (
-    G2_BROWSERSTACK_XPATHS,
-    G2_PAGE_XPATHS,
-    G2_PRODUCT_POOL,
-)
-from src.logging import logger
+from src.commons import *
 
 
 # ===================================================================== #
@@ -1052,11 +1044,11 @@ class G2Page:
                     actions.append("image")
                 except Exception as e:
                     logger.warning(f"Image interaction skipped: {e}")
-                time.sleep(random.uniform(3, 8))
+                time.sleep(random.uniform(1, 3))
             elif readable:
                 element = random.choice(readable)
                 self.human_simulator.mouse_hover(element)
-                time.sleep(random.uniform(2, 7))
+                time.sleep(random.uniform(1, 3))
                 actions.append("read")
             else:
                 self.human_simulator.move_mouse_around(1)
@@ -1155,47 +1147,55 @@ class G2Page:
             logger.info(f"G2 {self.product} automation started")
 
             self.human_simulator.input_search_query(
-                query=self.search_query, suggestion=False
+                query=self.search_query, suggestion=False,need_full=True
             )
 
-            try:
-                element_xpath = f"//*[contains(text(), '{self.target_text}')]/parent::a"
-                wait_for_element(
-                    driver=self.driver,
-                    locator=(By.XPATH, element_xpath),
-                    condition="presence",
-                    timeout=1,
-                    poll=0.5,
-                )
-                self.human_simulator.mouse_click_after_hover(
-                    self.driver.find_element(By.XPATH, element_xpath)
-                )
-                logger.info(f"Clicked Google result: {self.target_text}")
-            except Exception:
-                save_html(
-                    self.driver.page_source,
-                    f"G2_{self.product}_{self.comparing_product} ",
-                )
-                logger.error(f"Could not find the exact Google result: {self.target_text}")
-                raise RuntimeError(
-                    f"Could not find the exact Google result: {self.target_text}"
-                )
-            logger.info(f"Opened result: {self.driver.current_url}")
-
-            for refresh_attempt in range(3):
-                if not check_for_block(self.driver):
+            for i in range(3):
+                try:
+                    element_xpath = f"//*[contains(text(), '{self.target_text}')]/parent::a"
+                    wait_for_element(
+                        driver=self.driver,
+                        locator=(By.XPATH, element_xpath),
+                        condition="presence",
+                        timeout=1,
+                        poll=0.5,
+                    )
+                    self.human_simulator.mouse_click_after_hover(
+                        self.driver.find_element(By.XPATH, element_xpath)
+                    )
+                    logger.info(f"Clicked Google result: {self.target_text}")
                     break
-                logger.warning(
-                    f"[G2] Access-Denied page detected on Sauce Labs "
-                    f"(refresh {refresh_attempt + 1}/5)"
-                )
-                self.driver.refresh()
-                time.sleep(random.uniform(0.1,1))
+                except Exception as e:
+                    logger.error(f"Attempt {i} Failed due to {e}")
+                    take_screenshot(self.driver,f"G2_{self.product}_{self.comparing_product} ")
             else:
                 save_html(
                     self.driver.page_source,
                     f"G2_{self.product}_{self.comparing_product} ",
                 )
+                take_screenshot(self.driver,f"G2_{self.product}_{self.comparing_product} ")
+                logger.error(f"Could not find the exact Google result: {self.target_text}")
+                raise RuntimeError(
+                    f"Could not find the exact Google result: {self.target_text}"
+                )
+            
+            logger.info(f"Opened result: {self.driver.current_url}")
+
+            time.sleep(randint(1,3))
+
+            # for refresh_attempt in range(3):
+            # try:
+            if check_for_block(self.driver):
+            #         break
+            #     logger.warning(
+            #         f"[G2] Access-Denied page detected on Sauce Labs ")                )
+            #     self.driver.refresh()
+            # except:
+                save_html(
+                    self.driver.page_source,
+                    f"G2_{self.product}_{self.comparing_product} ",
+                )
+                take_screenshot(self.driver, f"G2_{self.product}_{self.comparing_product}")
                 logger.error(
                     f"G2 {self.product} page is still Access Denied "
                     "after 5 refreshes"
@@ -1213,7 +1213,7 @@ class G2Page:
             self._run_budgeted_word_selection()
 
             try:
-                browsing = self.browse_g2_page(min_seconds=1, max_seconds=5)
+                browsing = self.browse_g2_page(min_seconds=1, max_seconds=4)
                 logger.info(f"Varied G2 browsing: {browsing}")
             except Exception:
                 logger.exception("Browse g2 error")
@@ -1332,7 +1332,7 @@ class G2BrowserStack(G2Page):
     def run(self):
         logger.info("G2 BrowserStack automation started")
         self.human_simulator.input_search_query(
-            self.search_query, suggestion=False
+            self.search_query, suggestion=False,need_full=True
         )
         result = self.scroll_until_result_is_found(self.target_text)
         if result is None:

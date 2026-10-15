@@ -25,6 +25,13 @@ def check_for_block(driver):
         return True
     return False
 
+def url_changed(driver, old_url: str, timeout: float = 10) -> bool:
+    """Return True if the browser URL differs from old_url within `timeout` seconds."""
+    try:
+        WebDriverWait(driver, timeout).until(EC.url_changes(old_url))
+        return True
+    except TimeoutException:
+        return False
 
 
 # def check_for_block(driver):
@@ -122,6 +129,31 @@ def save_html(html_text, file_name="Test"):
     file_path = folder_path / final_name
     file_path.write_text(html_text, encoding="utf-8")
     logger.info(f"--------HTML SAVED for {file_path}----------")
+
+
+def take_screenshot(driver, file_name="Test"):
+    folder_path = Path("Screenshots")
+    folder_path.mkdir(parents=True, exist_ok=True)
+
+    stem = Path(file_name).stem
+    stem = re.sub(r'[<>:"/\\|?*]', '_', stem).rstrip('. ')
+    if not stem:
+        stem = "output"
+    stem = stem[:150]
+
+    # Generate the filename using today's date
+    today = date.today().strftime("%Y-%m-%d")
+    final_name = f"{stem}_{today}.png"
+    file_path = folder_path / final_name
+
+    success = driver.save_screenshot(str(file_path))
+
+    if success:
+        logger.info(f"-------- SS SAVED: {file_path} ----------")
+        return str(file_path)
+
+    logger.error(f"Failed to save screenshot: {file_path}")
+    return None
 
 # ---------------- time helpers ---------------- #
 

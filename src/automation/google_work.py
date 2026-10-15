@@ -249,7 +249,7 @@ class GoogleSearch:
         for keyword_combo in keyword_combos:
             keywords = keyword_combo[0]
             sug = keyword_combo[1]
-
+            need_full = keyword_combo[2]
             for keyword in keywords:
                 query = get_random_word_or_sentence_faker(keyword).lower()
 
@@ -263,7 +263,7 @@ class GoogleSearch:
                 self.check_for_pop_up(keyword)
                 
                 try:
-                    self.human_simulator.input_search_query(query,suggestion=sug)
+                    self.human_simulator.input_search_query(query,suggestion=sug,need_full=need_full)
                 except Exception:
                     logger.info("Google page may not have opened correctly, retrying.")
                     self.get_google(query=keyword)

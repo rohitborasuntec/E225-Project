@@ -60,8 +60,8 @@ class G2Automation:
                 "ai in test cases", "app android", "android on browser",
             ]
             keywords_combos = [
-                (random.choices(categories, k=2), False),
-                (random.choices(test_keywords, k=2), False),
+                (random.choices(categories, k=2), False,False),
+                (random.choices(test_keywords, k=2), False,True),
             ]
 
             # ---- Google Search ----
@@ -103,7 +103,6 @@ class G2Automation:
                 logger.exception(f"G2 comparison failed: {e}")
                 raise RetryableFailure(status) from e
 
-        # === FIX: bind `e` so `raise ... from e` doesn't NameError ===
         except (AccessDeniedError, RetryableFailure) as e:
             retry = True
             raise RetryableFailure(status) from e
