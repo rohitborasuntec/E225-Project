@@ -1181,11 +1181,15 @@ class G2Page:
             
             logger.info(f"Opened result: {self.driver.current_url}")
 
-            time.sleep(randint(1,3))
+            # time.sleep(randint(3,5))
 
             # for refresh_attempt in range(3):
             # try:
-            if check_for_block(self.driver):
+            
+            try:
+                wait_for_element(self.driver, (By.XPATH,'//ul[@aria-label="G2 Top Navigation Menu"]'), timeout=5, condition="visible", poll=0.5, raise_on_timeout=True)
+            except:   
+            # if check_for_block(self.driver):
             #         break
             #     logger.warning(
             #         f"[G2] Access-Denied page detected on Sauce Labs ")                )

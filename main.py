@@ -56,9 +56,33 @@ class G2Automation:
         try:
             categories = ['word', 'name', 'country', 'movie', 'music', 'sports', 'technology', 'News']
             test_keywords = [
-                "browser tests", "software testing", "automation tests",
-                "ai in test cases", "app android", "android on browser",
+                "software testing", "manual testing", "automation testing", "system testing",
+                "unit testing", "smoke testing", "sanity testing", "regression testing",
+                "functional testing", "performance testing", "security testing", "usability testing",
+                "acceptance testing", "integration testing", "exploratory testing", "load testing",
+                "stress testing", "soak testing", "spike testing", "volume testing",
+                "scalability testing", "compatibility testing", "localization testing", "globalization testing",
+                "accessibility testing", "api testing", "database testing", "migration testing",
+                "mutation testing", "penetration testing", "alpha testing", "beta testing",
+                "gamma testing", "monkey testing", "gorilla testing", "agile testing",
+                "component testing", "interface testing", "static testing", "dynamic testing",
+                "selenium automation", "playwright testing", "cypress testing", "appium testing",
+                "postman testing", "jmeter testing", "gatling testing", "cucumber testing",
+                "soapui testing", "katalon testing", "protractor testing", "puppeteer testing",
+                "testcafe testing", "webdriverio testing", "junit testing", "testng testing",
+                "pytest testing", "mocha testing", "jest testing", "rest assured",
+                "ai testing", "autonomous testing", "codeless testing", "visual testing",
+                "smart testing", "predictive testing", "continuous testing", "cloud testing",
+                "headless testing", "chaos engineering", "shift left", "shift right",
+                "test case", "test plan", "test suite", "test script",
+                "test scenario", "test run", "test execution", "test reporting",
+                "test coverage", "test data", "test environment", "test closure",
+                "test strategy", "test matrix", "test management", "test automation",
+                "bug tracking", "defect management", "error handling", "exception handling",
+                "quality assurance", "quality control", "boundary value", "equivalence partitioning",
+                "happy path", "negative testing", "black box", "white box"
             ]
+
             keywords_combos = [
                 (random.choices(categories, k=2), False,False),
                 (random.choices(test_keywords, k=2), False,True),

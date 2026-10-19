@@ -316,6 +316,10 @@ class Browser:
                 driver.set_window_size(*self.window_size)
             except Exception:
                 pass
+        try:
+            driver.set_page_load_timeout(15)
+        except Exception as exc:
+            logger.warning(f"Could not set page load timeout: {exc}")
         lo, hi = self.post_launch_delay
         if hi > 0:
             time.sleep(random.uniform(lo, hi))
